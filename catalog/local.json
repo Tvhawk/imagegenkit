@@ -1,6 +1,6 @@
 {
  "version": 1,
- "updated": "2026-11-21T23:33",
+ "updated": "2026-11-22T00:02",
  "engine": {
   "name": "stable-diffusion.cpp",
   "version": "master-1106-532d2c1",
@@ -461,38 +461,6 @@
    },
    "edit": false,
    "download": 6696835812
-  },
-  {
-   "id": "flux1-schnell",
-   "name": "FLUX.1 schnell",
-   "recipe": "flux1-schnell",
-   "note": "The classic FLUX look. Large download.",
-   "license": "Apache 2.0",
-   "ram": 24,
-   "file": {
-    "repo": "leejet/FLUX.1-schnell-gguf",
-    "path": "flux1-schnell-q4_k.gguf",
-    "size": 6884606880,
-    "sha256": "619697cc4c2bf587416aa1afa98d474a44c80eb4e3a3f64ea8f99ab0ed9adb7a"
-   },
-   "edit": false,
-   "download": 12359990324
-  },
-  {
-   "id": "qwen-image-edit-2511",
-   "name": "Qwen-Image Edit",
-   "recipe": "qwen-image-edit-2511",
-   "note": "Strongest edits. Large and slow.",
-   "license": "Apache 2.0",
-   "ram": 32,
-   "file": {
-    "repo": "unsloth/Qwen-Image-Edit-2511-GGUF",
-    "path": "qwen-image-edit-2511-Q3_K_M.gguf",
-    "size": 9920805472,
-    "sha256": "5631fd3a407880e1fb541dc47696628633c898565136c128d5a2741d4b84e9e9"
-   },
-   "edit": true,
-   "download": 15710803942
   }
  ],
  "block": {

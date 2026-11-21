@@ -121,7 +121,7 @@ Saved paths go to stdout. Every run is logged to `~/.config/imagegenkit/log.json
 Open image models that run on your Mac with [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) (MIT, Metal). No account, no cost per image, and nothing leaves your Mac.
 
 - **One click.** Pick a model in Settings › Providers › On this Mac and click Download. The engine comes along with the first model. Every file is checked against its SHA-256, and a stopped download continues where it left off.
-- **Examples:** FLUX.2 klein 4B (5.3 GB, makes and edits images), Z-Image Turbo (6.7 GB, best photos), FLUX.1 schnell and Qwen-Image Edit. All Apache 2.0.
+- **Examples:** FLUX.2 klein 4B (5.3 GB, makes and edits images) and Z-Image Turbo (6.7 GB, best photos and text in images). Both Apache 2.0.
 - **Any compatible model.** Search Hugging Face from the app (or `imagegenkit local-models search`). Results show only models whose family the engine runs, with the real download size. Fine-tunes are matched to their family through `base_model`. You can also paste a Hugging Face repo or file link, or any download link (`--recipe` names the family on the command line). Licenses that forbid commercial use are labelled "Non-commercial". Search hides adult and "uncensored" models (by Hugging Face tag and name); a link still adds any compatible model.
 - **Shared files.** Text encoders and VAEs are downloaded once and shared by the models that use them. Models live in `~/.local/share/imagegenkit/models` and are kept out of Time Machine.
 - **Edits** work with models marked "Edits" (FLUX.2 klein, FLUX.3 klein, Qwen-Image Edit): add reference images in Generate, or `imagegenkit edit -p local -i photo.png`.

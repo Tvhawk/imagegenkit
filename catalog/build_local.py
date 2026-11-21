@@ -130,12 +130,7 @@ MODELS = [
     {"id": "z-image-turbo", "name": "Z-Image Turbo", "recipe": "z-image-turbo",
      "note": "Best photos and text in images.", "license": "Apache 2.0", "ram": 16,
      "file": f("leejet/Z-Image-Turbo-GGUF", "z_image_turbo-Q4_K.gguf")},
-    {"id": "flux1-schnell", "name": "FLUX.1 schnell", "recipe": "flux1-schnell",
-     "note": "The classic FLUX look. Large download.", "license": "Apache 2.0", "ram": 24,
-     "file": f("leejet/FLUX.1-schnell-gguf", "flux1-schnell-q4_k.gguf")},
-    {"id": "qwen-image-edit-2511", "name": "Qwen-Image Edit", "recipe": "qwen-image-edit-2511",
-     "note": "Strongest edits. Large and slow.", "license": "Apache 2.0", "ram": 32,
-     "file": f("unsloth/Qwen-Image-Edit-2511-GGUF", "qwen-image-edit-2511-Q3_K_M.gguf")},
+    # FLUX.1 schnell (flux1-schnell-q4_k.gguf) and Qwen-Image Edit 2511 (Q3_K_M) come back once tested on a Mac.
 ]
 
 def base_license(repo):
