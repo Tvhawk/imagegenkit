@@ -48,10 +48,12 @@ struct SettingsProviderTile: View {
         case .gemini?: "diamond.fill"
         case .xai?: "bolt.horizontal.fill"
         case .compatible?: "server.rack"
+        case .local?: "laptopcomputer"
         default:
             switch id {
             case "grok": "bolt.fill"
             case "codex": "bubble.left.and.bubble.right.fill"
+            case "local": "laptopcomputer"
             default: "key.fill"
             }
         }

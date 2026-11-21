@@ -65,6 +65,7 @@ struct RootView: View {
             config.catalogPrices = Dictionary(uniqueKeysWithValues: catalog.providers.map { ($0.id, $0.prices) })
             await installer.refresh()
             await status.refresh(config.providers)
+            if status.state("local").isReady { await LocalModels.shared.refresh(installer: installer) }
             await updater.check(quiet: true)
             await catalog.refresh()
             config.catalogPrices = Dictionary(uniqueKeysWithValues: catalog.providers.map { ($0.id, $0.prices) })

@@ -1,0 +1,481 @@
+{
+ "version": 1,
+ "updated": "2026-11-21T22:35",
+ "engine": {
+  "name": "stable-diffusion.cpp",
+  "version": "master-1106-532d2c1",
+  "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1106-532d2c1/sd-master-532d2c1-bin-Darwin-macOS-26.7.2-arm64.zip",
+  "sha256": "8146d6ffc75f8ff8f64b62a80fffee8fb714ab65e368e202084135fa07cc6f36",
+  "size": 38331254,
+  "binary": "sd-cli",
+  "license": "MIT",
+  "homepage": "https://github.com/leejet/stable-diffusion.cpp"
+ },
+ "components": {
+  "qwen3-4b": {
+   "repo": "unsloth/Qwen3-4B-GGUF",
+   "path": "Qwen3-4B-Q4_K_M.gguf",
+   "size": 2497281312,
+   "sha256": "f6f851777709861056efcdad3af01da38b31223a3ba26e61a4f8bf3a2195813a"
+  },
+  "qwen3-4b-instruct": {
+   "repo": "unsloth/Qwen3-4B-Instruct-2507-GGUF",
+   "path": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+   "size": 2497281120,
+   "sha256": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597"
+  },
+  "qwen3-8b": {
+   "repo": "unsloth/Qwen3-8B-GGUF",
+   "path": "Qwen3-8B-Q4_K_M.gguf",
+   "size": 5027784512,
+   "sha256": "120307ba529eb2439d6c430d94104dabd578497bc7bfe7e322b5d9933b449bd4"
+  },
+  "qwen3-vl-4b": {
+   "repo": "Qwen/Qwen3-VL-4B-Instruct-GGUF",
+   "path": "Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+   "size": 2497281664,
+   "sha256": "66358cb18bb6b3b1b6675aa412c7a88ef01d228f481184d13668e5201c730a0a"
+  },
+  "qwen25-vl-7b": {
+   "repo": "mradermacher/Qwen2.5-VL-7B-Instruct-GGUF",
+   "path": "Qwen2.5-VL-7B-Instruct.Q4_K_M.gguf",
+   "size": 4683072512,
+   "sha256": "0f00a930ba3108b6861ddadf74d8ebbd82e257c63eba728e62c3e8970f5eed94"
+  },
+  "qwen25-vl-7b-vision": {
+   "repo": "mradermacher/Qwen2.5-VL-7B-Instruct-GGUF",
+   "path": "Qwen2.5-VL-7B-Instruct.mmproj-Q8_0.gguf",
+   "size": 853119712,
+   "sha256": "2185ca0adf339f96845318c7b666f5d242f86bbace5657a89cb834785d0cea57"
+  },
+  "flux2-vae": {
+   "repo": "Comfy-Org/flux2-klein-4B",
+   "path": "split_files/vae/flux2-vae.safetensors",
+   "size": 336211292,
+   "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3"
+  },
+  "flux-ae": {
+   "repo": "Comfy-Org/z_image_turbo",
+   "path": "split_files/vae/ae.safetensors",
+   "size": 335304388,
+   "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
+  },
+  "qwen-image-vae": {
+   "repo": "Comfy-Org/Qwen-Image_ComfyUI",
+   "path": "split_files/vae/qwen_image_vae.safetensors",
+   "size": 253806246,
+   "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f"
+  },
+  "clip-l": {
+   "repo": "comfyanonymous/flux_text_encoders",
+   "path": "clip_l.safetensors",
+   "size": 246144152,
+   "sha256": "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd"
+  },
+  "t5xxl": {
+   "repo": "comfyanonymous/flux_text_encoders",
+   "path": "t5xxl_fp8_e4m3fn.safetensors",
+   "size": 4893934904,
+   "sha256": "7d330da4816157540d6bb7838bf63a0f02f573fc48ca4d8de34bb0cbfd514f09"
+  }
+ },
+ "recipes": {
+  "flux2-klein-4b": {
+   "name": "FLUX.2 klein 4B",
+   "base": [
+    "black-forest-labs/FLUX.2-klein-4B"
+   ],
+   "slots": {
+    "llm": "qwen3-4b",
+    "vae": "flux2-vae"
+   },
+   "edit": true,
+   "multiple": 16,
+   "defaults": {
+    "steps": 4,
+    "cfg": 1,
+    "sampler": "euler",
+    "width": 1024,
+    "height": 1024
+   }
+  },
+  "flux2-klein-base-4b": {
+   "name": "FLUX.2 klein base 4B",
+   "base": [
+    "black-forest-labs/FLUX.2-klein-base-4B"
+   ],
+   "slots": {
+    "llm": "qwen3-4b",
+    "vae": "flux2-vae"
+   },
+   "edit": true,
+   "multiple": 16,
+   "defaults": {
+    "steps": 20,
+    "cfg": 4,
+    "sampler": "euler",
+    "width": 1024,
+    "height": 1024
+   }
+  },
+  "flux2-klein-9b": {
+   "name": "FLUX.2 klein 9B",
+   "base": [
+    "black-forest-labs/FLUX.2-klein-9B"
+   ],
+   "slots": {
+    "llm": "qwen3-8b",
+    "vae": "flux2-vae"
+   },
+   "edit": true,
+   "multiple": 16,
+   "defaults": {
+    "steps": 4,
+    "cfg": 1,
+    "sampler": "euler",
+    "width": 1024,
+    "height": 1024
+   }
+  },
+  "flux2-klein-base-9b": {
+   "name": "FLUX.2 klein base 9B",
+   "base": [
+    "black-forest-labs/FLUX.2-klein-base-9B"
+   ],
+   "slots": {
+    "llm": "qwen3-8b",
+    "vae": "flux2-vae"
+   },
+   "edit": true,
+   "multiple": 16,
+   "defaults": {
+    "steps": 20,
+    "cfg": 4,
+    "sampler": "euler",
+    "width": 1024,
+    "height": 1024
+   }
+  },
+  "flux3-klein": {
+   "name": "FLUX.3 klein",
+   "base": [
+    "black-forest-labs/flux-3-image-klein"
+   ],
+   "slots": {
+    "llm": "qwen3-vl-4b",
+    "vae": "flux2-vae"
+   },
+   "edit": true,
+   "multiple": 16,
+   "defaults": {
+    "steps": 16,
+    "cfg": 1,
+    "sampler": "euler",
+    "width": 1024,
+    "height": 1024
+   }
+  },
+  "flux3-klein-base": {
+   "name": "FLUX.3 klein base",
+   "base": [
+    "black-forest-labs/flux-3-image-klein-base"
+   ],
+   "slots": {
+    "llm": "qwen3-vl-4b",
+    "vae": "flux2-vae"
+   },
+   "edit": true,
+   "multiple": 16,
+   "defaults": {
+    "steps": 20,
+    "cfg": 4,
+    "sampler": "euler",
+    "width": 1024,
+    "height": 1024
+   }
+  },
+  "z-image-turbo": {
+   "name": "Z-Image Turbo",
+   "base": [
+    "Tongyi-MAI/Z-Image-Turbo"
+   ],
+   "slots": {
+    "llm": "qwen3-4b-instruct",
+    "vae": "flux-ae"
+   },
+   "edit": false,
+   "multiple": 16,
+   "defaults": {
+    "steps": 9,
+    "cfg": 1,
+    "sampler": "euler",
+    "width": 1024,
+    "height": 1024
+   }
+  },
+  "z-image": {
+   "name": "Z-Image",
+   "base": [
+    "Tongyi-MAI/Z-Image"
+   ],
+   "slots": {
+    "llm": "qwen3-4b-instruct",
+    "vae": "flux-ae"
+   },
+   "edit": false,
+   "multiple": 16,
+   "defaults": {
+    "steps": 20,
+    "cfg": 4,
+    "sampler": "euler",
+    "width": 1024,
+    "height": 1024
+   }
+  },
+  "flux1-schnell": {
+   "name": "FLUX.1 schnell",
+   "base": [
+    "black-forest-labs/FLUX.1-schnell"
+   ],
+   "slots": {
+    "clip_l": "clip-l",
+    "t5xxl": "t5xxl",
+    "vae": "flux-ae"
+   },
+   "edit": false,
+   "multiple": 16,
+   "defaults": {
+    "steps": 4,
+    "cfg": 1,
+    "sampler": "euler",
+    "width": 1024,
+    "height": 1024
+   }
+  },
+  "flux1-dev": {
+   "name": "FLUX.1 dev",
+   "base": [
+    "black-forest-labs/FLUX.1-dev"
+   ],
+   "slots": {
+    "clip_l": "clip-l",
+    "t5xxl": "t5xxl",
+    "vae": "flux-ae"
+   },
+   "edit": false,
+   "multiple": 16,
+   "defaults": {
+    "steps": 20,
+    "cfg": 1,
+    "guidance": 3.5,
+    "sampler": "euler",
+    "width": 1024,
+    "height": 1024
+   }
+  },
+  "chroma": {
+   "name": "Chroma",
+   "base": [
+    "lodestones/Chroma1-HD",
+    "lodestones/Chroma"
+   ],
+   "slots": {
+    "t5xxl": "t5xxl",
+    "vae": "flux-ae"
+   },
+   "edit": false,
+   "multiple": 16,
+   "defaults": {
+    "steps": 20,
+    "cfg": 3,
+    "sampler": "euler",
+    "width": 1024,
+    "height": 1024
+   }
+  },
+  "qwen-image": {
+   "name": "Qwen-Image",
+   "base": [
+    "Qwen/Qwen-Image",
+    "Qwen/Qwen-Image-2512"
+   ],
+   "slots": {
+    "llm": "qwen25-vl-7b",
+    "vae": "qwen-image-vae"
+   },
+   "edit": false,
+   "multiple": 16,
+   "defaults": {
+    "steps": 20,
+    "cfg": 4,
+    "flow_shift": 3,
+    "sampler": "euler",
+    "width": 1024,
+    "height": 1024
+   }
+  },
+  "qwen-image-edit": {
+   "name": "Qwen-Image Edit",
+   "base": [
+    "Qwen/Qwen-Image-Edit",
+    "Qwen/Qwen-Image-Edit-2509"
+   ],
+   "slots": {
+    "llm": "qwen25-vl-7b",
+    "llm_vision": "qwen25-vl-7b-vision",
+    "vae": "qwen-image-vae"
+   },
+   "edit": true,
+   "multiple": 16,
+   "defaults": {
+    "steps": 20,
+    "cfg": 4,
+    "flow_shift": 3,
+    "sampler": "euler",
+    "width": 1024,
+    "height": 1024
+   }
+  },
+  "qwen-image-edit-2511": {
+   "name": "Qwen-Image Edit 2511",
+   "base": [
+    "Qwen/Qwen-Image-Edit-2511"
+   ],
+   "slots": {
+    "llm": "qwen25-vl-7b",
+    "llm_vision": "qwen25-vl-7b-vision",
+    "vae": "qwen-image-vae"
+   },
+   "edit": true,
+   "multiple": 16,
+   "model_args": "qwen_image_zero_cond_t=true",
+   "defaults": {
+    "steps": 20,
+    "cfg": 4,
+    "flow_shift": 3,
+    "sampler": "euler",
+    "width": 1024,
+    "height": 1024
+   }
+  },
+  "sdxl": {
+   "name": "Stable Diffusion XL",
+   "main": "model",
+   "base": [
+    "stabilityai/stable-diffusion-xl-base-1.0"
+   ],
+   "slots": {},
+   "edit": false,
+   "multiple": 64,
+   "defaults": {
+    "steps": 20,
+    "cfg": 5,
+    "sampler": "euler_a",
+    "width": 1024,
+    "height": 1024
+   }
+  },
+  "sdxl-turbo": {
+   "name": "SDXL Turbo",
+   "main": "model",
+   "base": [
+    "stabilityai/sdxl-turbo"
+   ],
+   "slots": {},
+   "edit": false,
+   "multiple": 64,
+   "defaults": {
+    "steps": 1,
+    "cfg": 1,
+    "sampler": "euler_a",
+    "width": 512,
+    "height": 512
+   }
+  },
+  "sd1": {
+   "name": "Stable Diffusion 1.5",
+   "main": "model",
+   "base": [
+    "stable-diffusion-v1-5/stable-diffusion-v1-5",
+    "runwayml/stable-diffusion-v1-5",
+    "CompVis/stable-diffusion-v1-4"
+   ],
+   "slots": {},
+   "edit": false,
+   "multiple": 64,
+   "defaults": {
+    "steps": 20,
+    "cfg": 7.5,
+    "sampler": "euler_a",
+    "width": 512,
+    "height": 512
+   }
+  }
+ },
+ "models": [
+  {
+   "id": "flux2-klein-4b",
+   "name": "FLUX.2 klein 4B",
+   "recipe": "flux2-klein-4b",
+   "note": "Fast. Makes and edits images.",
+   "license": "Apache 2.0",
+   "ram": 16,
+   "file": {
+    "repo": "leejet/FLUX.2-klein-4B-GGUF",
+    "path": "flux-2-klein-4b-Q4_0.gguf",
+    "size": 2460378560,
+    "sha256": "d1023499ef3f2f82ff7c50e6778495195c1b6cc34835741778868428111f9ff4"
+   },
+   "edit": true,
+   "download": 5293871164
+  },
+  {
+   "id": "z-image-turbo",
+   "name": "Z-Image Turbo",
+   "recipe": "z-image-turbo",
+   "note": "Best photos and text in images.",
+   "license": "Apache 2.0",
+   "ram": 16,
+   "file": {
+    "repo": "leejet/Z-Image-Turbo-GGUF",
+    "path": "z_image_turbo-Q4_K.gguf",
+    "size": 3864250304,
+    "sha256": "14b375ab4f226bc5378f68f37e899ef3c2242b8541e61e2bc1aff40976086fbd"
+   },
+   "edit": false,
+   "download": 6696835812
+  },
+  {
+   "id": "flux1-schnell",
+   "name": "FLUX.1 schnell",
+   "recipe": "flux1-schnell",
+   "note": "The classic FLUX look. Large download.",
+   "license": "Apache 2.0",
+   "ram": 24,
+   "file": {
+    "repo": "leejet/FLUX.1-schnell-gguf",
+    "path": "flux1-schnell-q4_k.gguf",
+    "size": 6884606880,
+    "sha256": "619697cc4c2bf587416aa1afa98d474a44c80eb4e3a3f64ea8f99ab0ed9adb7a"
+   },
+   "edit": false,
+   "download": 12359990324
+  },
+  {
+   "id": "qwen-image-edit-2511",
+   "name": "Qwen-Image Edit",
+   "recipe": "qwen-image-edit-2511",
+   "note": "Strongest edits. Large and slow.",
+   "license": "Apache 2.0",
+   "ram": 32,
+   "file": {
+    "repo": "unsloth/Qwen-Image-Edit-2511-GGUF",
+    "path": "qwen-image-edit-2511-Q3_K_M.gguf",
+    "size": 9920805472,
+    "sha256": "5631fd3a407880e1fb541dc47696628633c898565136c128d5a2741d4b84e9e9"
+   },
+   "edit": true,
+   "download": 15710803942
+  }
+ ]
+}

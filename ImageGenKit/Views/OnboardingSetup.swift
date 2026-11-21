@@ -73,7 +73,7 @@ struct OnboardingProviderStep: View {
                     HStack(spacing: 10) {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                         Text(p.label).font(.system(size: 14, weight: .medium))
-                        Pill(text: p.kind.isSubscription ? "Subscription" : "API key")
+                        Pill(text: p.kind == .local ? "On this Mac" : p.kind.isSubscription ? "Subscription" : "API key")
                         Spacer(minLength: 0)
                     }
                     .onboardingEnter(i)

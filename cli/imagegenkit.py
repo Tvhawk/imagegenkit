@@ -21,20 +21,24 @@ import hashlib
 import json
 import math
 import os
+import random
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import http.client as http_client
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
 
-VERSION = "1.0.6"
+VERSION = "1.1.0"
 HOMEPAGE = "https://github.com/davidkrammer/imagegenkit"
 GITHUB_REPO = "davidkrammer/imagegenkit"
 # The env overrides are for testing against a local server.
@@ -66,7 +70,7 @@ DEFAULTS = {
     "resolution": "2K",
     "quality": "medium",
     "output_dir": "~/Pictures/ImageGenKit",
-    "order": ["grok", "codex", "openai", "xai", "gemini"],  # fallback order when the task's provider isn't set up
+    "order": ["grok", "codex", "openai", "xai", "gemini", "local"],  # fallback order when the task's provider isn't set up
     "tasks": {
         "draft": {"provider": "grok", "quality": "low", "resolution": "1K"},
         "final": {"provider": "openai"},
@@ -94,12 +98,15 @@ BUILTIN_PROVIDERS = {
             "env": "XAI_API_KEY", "key_url": "https://console.x.ai"},
     "gemini": {"type": "gemini", "label": "Google Gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta",
                "env": "GEMINI_API_KEY", "key_url": "https://aistudio.google.com/apikey"},
+    "local": {"type": "local", "label": "On this Mac"},
 }
 CAN_TRANSPARENT = {"openai"}  # provider types that return real alpha
 CUSTOM_TYPES = ("openai-compatible", "openrouter", "together", "fal")  # adapters for providers in config/catalog
 SUBSCRIPTION_TYPES = {"grok-build", "codex-cli"}  # log in instead of an API key
+FREE_TYPES = SUBSCRIPTION_TYPES | {"local"}  # no per-image cost: never counted against limits
+KEYLESS_TYPES = SUBSCRIPTION_TYPES | {"local"}
 RESERVED = set(TASKS) | {"usage", "update", "check", "models", "set-key", "delete-key", "config", "providers", "provider", "version",
-                         "help", "log"}
+                         "help", "log", "local-models"}
 
 MIME_BY_EXT = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
@@ -344,6 +351,8 @@ def readiness(spec):
         if not (CODEX_HOME / "auth.json").exists():
             return False, "not logged in (run: codex login)"
         return True, "logged in"
+    if spec["type"] == "local":
+        return local_readiness()
     k, src = key_for(spec)
     if not k:
         return False, "no API key"
@@ -703,7 +712,7 @@ def prices_for(cfg, provider, model=None):
 
 def estimate_cost(entry, cfg):
     """Estimated USD of one logged run (0 for subscriptions). Mirrors ConfigStore.cost in the app."""
-    if entry.get("type") in SUBSCRIPTION_TYPES or entry.get("provider") == "grok":
+    if entry.get("type") in FREE_TYPES or entry.get("provider") == "grok":
         return 0.0
     u = entry.get("usage") or {}
     if isinstance(u.get("cost_usd"), (int, float)):
@@ -767,7 +776,7 @@ def check_limits(cfg, spec):
     """With 'stop_paid', refuse paid providers once the spend or image limit is reached. Subscriptions keep working
     (same as the app: "Paid images are paused until next month. Subscriptions still work.")."""
     cost_limit, image_limit, stop = limit_values(cfg)
-    if not stop or spec["type"] in SUBSCRIPTION_TYPES or not (cost_limit or image_limit):
+    if not stop or spec["type"] in FREE_TYPES or not (cost_limit or image_limit):
         return
     cost, images, _ = month_usage(cfg)
     if cost_limit and cost >= cost_limit:
@@ -1179,9 +1188,737 @@ def run_codex(a, cfg, spec, task):
            refs, images, None, t0, {"codex_thread": thread})
 
 
+# ---------- local models (On this Mac) ----------
+# Open image models run on the Mac by stable-diffusion.cpp (sd-cli). The engine and the model files are downloaded
+# once (sha256-checked); catalog/local.json lists the engine build, curated models, the shared text encoders and
+# VAEs, and the model families ("recipes") with their engine settings.
+
+LOCAL_HOME = Path(os.environ.get("IMAGEGENKIT_LOCAL_HOME", Path.home() / ".local" / "share" / "imagegenkit"))
+LOCAL_MODELS = LOCAL_HOME / "models"
+LOCAL_ENGINES = LOCAL_HOME / "engine"
+LOCAL_REGISTRY = LOCAL_HOME / "local-models.json"
+LOCAL_CATALOG_URL = f"{RAW_BASE}/main/catalog/local.json"
+LOCAL_CATALOG_CACHE = CONFIG_DIR / "local-catalog.json"
+LOCAL_WORKDIR = CONFIG_DIR / "local-work"
+HF_BASE = os.environ.get("IMAGEGENKIT_HF_BASE", "https://huggingface.co").rstrip("/")
+LOCAL_TIMEOUT = 3600
+# Preferred quantizations when a repo has several: small but good first, 8-bit last (twice the download).
+QUANT_ORDER = ["q4_k_m", "q4_k", "q4_k_s", "q4_0", "q5_k_m", "q5_k", "q5_0", "q6_k", "q3_k_m", "q3_k", "q8_0"]
+
+
+def gb(n):
+    n = n or 0
+    return f"{n / 1e9:.1f} GB" if n >= 1e9 else f"{n / 1e6:.0f} MB"
+
+
+def apple_silicon():
+    try:
+        return subprocess.run(["sysctl", "-n", "hw.optional.arm64"], capture_output=True, text=True).stdout.strip() == "1"
+    except OSError:
+        return False
+
+
+def mac_ram_gb():
+    try:
+        return round(int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True).stdout) / 2 ** 30)
+    except (OSError, ValueError):
+        return 0
+
+
+def local_catalog(refresh=False):
+    """The newest of the cached catalog, the copy next to this script (inside the app) and GitHub (once a day)."""
+    found = []
+    here = Path(__file__).resolve().parent
+    for path in (LOCAL_CATALOG_CACHE, here / "local.json", here.parent / "catalog" / "local.json"):  # app bundle, checkout
+        try:
+            data = json.loads(path.read_text())
+            if isinstance(data, dict) and data.get("engine"):
+                found.append(data)
+        except (OSError, ValueError):
+            pass
+    best = max(found, key=lambda c: c.get("updated", ""), default=None)
+    try:
+        stale = time.time() - LOCAL_CATALOG_CACHE.stat().st_mtime > 86400
+    except OSError:
+        stale = True
+    if refresh or stale or best is None:
+        try:
+            req = urllib.request.Request(LOCAL_CATALOG_URL, headers={"User-Agent": "imagegenkit"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                data = json.loads(r.read())
+            if isinstance(data, dict) and data.get("engine") and (not best or data.get("updated", "") >= best.get("updated", "")):
+                best = data
+        except (OSError, ValueError, http_client.HTTPException):
+            pass
+        if best:
+            try:
+                CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+                LOCAL_CATALOG_CACHE.write_text(json.dumps(best))
+            except OSError:
+                pass
+    if not best:
+        raise Unavailable("can't load the local model list. Check your internet connection")
+    return best
+
+
+def local_registry():
+    try:
+        data = json.loads(LOCAL_REGISTRY.read_text())
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("models", [])
+    return data
+
+
+def save_local_registry(data):
+    LOCAL_HOME.mkdir(parents=True, exist_ok=True)
+    tmp = LOCAL_REGISTRY.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False) + "\n")
+    tmp.replace(LOCAL_REGISTRY)
+
+
+def local_path(rel):
+    p = Path(rel).expanduser()
+    return p if p.is_absolute() else LOCAL_MODELS / p
+
+
+def local_model_ready(m):
+    return all(local_path(f).is_file() for f in (m.get("files") or {}).values())
+
+
+def local_engine():
+    """The installed engine binary, or None. IMAGEGENKIT_SD_CLI points at another build (testing)."""
+    if os.environ.get("IMAGEGENKIT_SD_CLI"):
+        return os.environ["IMAGEGENKIT_SD_CLI"]
+    e = local_registry().get("engine") or {}
+    if not e.get("version"):
+        return None
+    exe = LOCAL_ENGINES / e["version"] / e.get("binary", "sd-cli")
+    return str(exe) if os.access(exe, os.X_OK) else None
+
+
+def local_models():
+    return [m for m in local_registry()["models"] if local_model_ready(m)]
+
+
+def local_readiness():
+    if not apple_silicon():
+        return False, "needs a Mac with Apple silicon"
+    if not local_engine():
+        return False, "no local model downloaded"
+    n = len(local_models())
+    return (True, f"{n} model{'s' if n != 1 else ''}") if n else (False, "no local model downloaded")
+
+
+def local_check():
+    exe = local_engine()
+    try:
+        r = subprocess.run([exe, "--help"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        return "error", f"engine doesn't start: {e}"
+    if r.returncode != 0:
+        return "error", f"engine doesn't start: {(r.stderr or r.stdout).strip()[-200:]}"
+    names = ", ".join(m["name"] for m in local_models())
+    return "ok", f"{names} ({local_registry().get('engine', {}).get('version', '?')})"
+
+
+def hf_token():
+    return os.environ.get("HF_TOKEN") or keychain_read(keychain_service("huggingface"))
+
+
+def hf_get(path):
+    headers = {"User-Agent": "imagegenkit", "Accept": "application/json"}
+    token = hf_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(HF_BASE + path, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise ApiError(404, "not found on Hugging Face")
+        if e.code in (401, 403):
+            raise ApiError(e.code, "this Hugging Face model needs a login (gated or private)")
+        raise ApiError(e.code, f"Hugging Face: {short_text(e.read().decode('utf-8', 'replace'))}")
+    except (OSError, ValueError, http_client.HTTPException) as e:
+        raise ApiError(0, f"can't reach Hugging Face: {getattr(e, 'reason', e)}")
+
+
+def hf_file_url(repo, path):
+    return f"{HF_BASE}/{repo}/resolve/main/{urllib.parse.quote(path)}"
+
+
+class Progress:
+    """Download progress: a line on stderr, or JSON lines on stdout for the app (--json)."""
+
+    def __init__(self, total, as_json):
+        self.total, self.done, self.json, self.last, self.started = total, 0, as_json, 0.0, time.time()
+
+    def event(self, **kw):
+        if self.json:
+            print(json.dumps(kw), flush=True)
+
+    def add(self, n, label, force=False):
+        self.done += n
+        now = time.time()
+        if not force and now - self.last < 0.25:
+            return
+        self.last = now
+        if self.json:
+            self.event(event="progress", done=self.done, total=self.total, file=label)
+        else:
+            pct = int(self.done * 100 / self.total) if self.total else 0
+            sys.stderr.write(f"\r  downloading {label}: {gb(self.done)} of {gb(self.total)} ({pct}%)   ")
+            sys.stderr.flush()
+
+    def end(self):
+        if not self.json and self.total:
+            sys.stderr.write("\n")
+
+
+def fetch_file(url, dest, size, sha256, progress, label, auth=False):
+    """Download to dest (resumes a .part file), verifying size and sha256."""
+    dest = Path(dest)
+    if dest.is_file() and (not size or dest.stat().st_size == size):
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
+    have = part.stat().st_size if part.exists() else 0
+    if size and have > size:
+        part.unlink()
+        have = 0
+    digest = hashlib.sha256()
+    if have and sha256:
+        with part.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 22), b""):
+                digest.update(chunk)
+    req = urllib.request.Request(url, headers={"User-Agent": "imagegenkit"})
+    if have:
+        req.add_header("Range", f"bytes={have}-")
+    token = hf_token() if auth else None
+    if token:
+        req.add_unredirected_header("Authorization", f"Bearer {token}")  # never sent on to the CDN
+    progress.add(have, label, force=True)
+    try:
+        r = urllib.request.urlopen(req, timeout=60)
+    except urllib.error.HTTPError as e:
+        if e.code == 416 and size and have == size:
+            r = None
+        elif e.code in (401, 403):
+            raise ApiError(e.code, f"{label} needs a Hugging Face login (accept the model's terms on huggingface.co "
+                                   "and add a token: imagegenkit set-key huggingface)")
+        else:
+            raise ApiError(e.code, f"couldn't download {label} (HTTP {e.code})")
+    except (OSError, http_client.HTTPException) as e:
+        raise ApiError(0, f"couldn't download {label}: {getattr(e, 'reason', e)}")
+    if r is not None:
+        with r:
+            mode = "ab"
+            if have and r.status != 206:  # the server ignored the range: start over
+                progress.add(-have, label)
+                have, digest, mode = 0, hashlib.sha256(), "wb"
+            try:
+                with part.open(mode) as out:
+                    while True:
+                        chunk = r.read(1 << 20)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        digest.update(chunk)
+                        have += len(chunk)
+                        progress.add(len(chunk), label)
+            except (OSError, http_client.HTTPException) as e:
+                raise ApiError(0, f"download of {label} interrupted ({e}). Run it again to continue")
+    if size and have != size:
+        raise ApiError(0, f"download of {label} incomplete ({gb(have)} of {gb(size)}). Run it again to continue")
+    if sha256 and digest.hexdigest() != sha256:
+        part.unlink()
+        raise ApiError(0, f"{label} is damaged (checksum mismatch). Run it again to download it fresh")
+    part.replace(dest)
+    progress.add(0, label, force=True)  # the last chunk's update may have been skipped
+
+
+def install_engine(cat, progress):
+    eng = cat["engine"]
+    dest = LOCAL_ENGINES / eng["version"]
+    exe = dest / eng.get("binary", "sd-cli")
+    if not os.access(exe, os.X_OK):
+        archive = LOCAL_ENGINES / f"{eng['version']}.zip"
+        fetch_file(eng["url"], archive, eng.get("size"), eng.get("sha256"), progress, "engine")
+        tmp = LOCAL_ENGINES / f".{eng['version']}.tmp"
+        shutil.rmtree(tmp, ignore_errors=True)
+        if subprocess.run(["ditto", "-x", "-k", str(archive), str(tmp)], capture_output=True).returncode != 0:
+            raise ApiError(0, "couldn't unpack the engine")
+        found = next((p for p in tmp.rglob(eng.get("binary", "sd-cli")) if p.is_file()), None)
+        if not found:
+            raise ApiError(0, "the engine download has no sd-cli")
+        shutil.rmtree(dest, ignore_errors=True)
+        found.parent.rename(dest)
+        shutil.rmtree(tmp, ignore_errors=True)
+        archive.unlink()
+    try:
+        ok = subprocess.run([str(exe), "--help"], capture_output=True, timeout=60).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        ok = False
+    if not ok:
+        raise ApiError(0, "the engine doesn't start on this Mac")
+    for old in LOCAL_ENGINES.iterdir():
+        if old.is_dir() and old != dest:
+            shutil.rmtree(old, ignore_errors=True)
+    reg = local_registry()
+    reg["engine"] = {"version": eng["version"], "binary": eng.get("binary", "sd-cli")}
+    save_local_registry(reg)
+    return str(exe)
+
+
+def base_models(info):
+    """The base_model repos a Hugging Face model names (card data and tags), and whether it is a LoRA adapter."""
+    card = info.get("cardData") or {}
+    bases = card.get("base_model") or []
+    bases = [bases] if isinstance(bases, str) else list(bases)
+    adapter = False
+    for t in info.get("tags") or []:
+        if t.startswith("base_model:"):
+            parts = t.split(":")
+            if len(parts) == 3 and parts[1] == "adapter":
+                adapter = True
+            bases.append(parts[-1])
+    return list(dict.fromkeys(b for b in bases if isinstance(b, str))), adapter
+
+
+def match_recipe(info, cat, lookups=None):
+    """(recipe id, reason): which model family this repo belongs to, following base_model up to two levels."""
+    recipes = cat["recipes"]
+    by_base = {b.lower(): rid for rid, r in recipes.items() for b in r.get("base", [])}
+    lookups = {} if lookups is None else lookups
+    repo = info.get("id") or info.get("modelId") or ""
+    if repo.lower() in by_base:
+        return by_base[repo.lower()], None
+    bases, adapter = base_models(info)
+    if adapter:
+        return None, "a LoRA add-on, not a full model"
+    for depth in range(2):
+        for b in bases:
+            if b.lower() in by_base:
+                return by_base[b.lower()], None
+        if depth == 1:
+            break
+        nxt = []
+        for b in bases[:3]:
+            if b not in lookups:
+                try:
+                    lookups[b] = base_models(hf_get(f"/api/models/{urllib.parse.quote(b, safe='/')}?expand[]=cardData&expand[]=tags"))[0]
+                except ApiError:
+                    lookups[b] = []
+            nxt += lookups[b]
+        bases = nxt
+    return None, "a model family ImageGenKit can't run yet"
+
+
+def quant_rank(name):
+    n = name.lower()
+    for i, q in enumerate(QUANT_ORDER):
+        if re.search(rf"(?<![a-z0-9]){q}(?![a-z0-9])", n.replace("-", "_").replace(".", "_")):
+            return i
+    return len(QUANT_ORDER)
+
+
+def weights_candidates(files, recipe):
+    skip = re.compile(r"mmproj|vae|text_encoder|clip|t5|lora|controlnet|upscal|tae", re.I)
+    cands = [x for x in files if x["path"].endswith(".gguf") and not skip.search(Path(x["path"]).name)]
+    if recipe.get("main") == "model":
+        cands += [x for x in files if "/" not in x["path"] and x["path"].endswith(".safetensors")
+                  and (x.get("size") or 0) > 1e9 and not skip.search(x["path"])]
+    return sorted(cands, key=lambda x: (quant_rank(x["path"]), x.get("size") or 0))
+
+
+def pick_weights(files, recipe, wanted=None):
+    """The weights file to download from a repo's file list."""
+    if wanted:
+        f = next((x for x in files if x["path"] == wanted), None)
+        if not f:
+            die(f"no file {wanted} in that repo")
+        return f
+    cands = weights_candidates(files, recipe)
+    if not cands:
+        die("that repo has no single weights file ImageGenKit can use (it needs a .gguf, or a single .safetensors "
+            "for Stable Diffusion models)")
+    return cands[0]
+
+
+def quant_label(name):
+    m = re.search(r"(?i)(?<![a-z0-9])(i?q\d_k_[msl]|i?q\d_k|q\d_\d|bf16|f16|fp16|fp8)(?![a-z0-9])", name.replace("-", "_").replace(".", "_"))
+    return m.group(1).upper() if m else None
+
+
+def local_id(text):
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:64]
+
+
+def resolve_local(spec, cat, recipe=None, wanted=None):
+    """What `local-models add` installs: a curated id, a Hugging Face repo or link, a download link or a local file."""
+    for m in cat["models"]:
+        if spec.lower() in (m["id"].lower(), m["name"].lower()):
+            return dict(m, source=f"{HF_BASE}/{m['file']['repo']}")
+    if recipe and recipe not in cat["recipes"]:
+        die(f"unknown model family {recipe} (one of: {', '.join(cat['recipes'])})")
+    hf = re.match(r"^(?:https?://(?:www\.)?huggingface\.co/)?([\w.-]+/[\w.-]+)(?:/(?:blob|resolve|tree)/[^/]+/(.+?))?/?(?:[?#].*)?$", spec)
+    if hf and not Path(spec).expanduser().exists() and (spec.startswith("http") or spec.count("/") == 1):
+        repo, path = hf.group(1), urllib.parse.unquote(hf.group(2)) if hf.group(2) else wanted
+        info = hf_get(f"/api/models/{repo}?expand[]=cardData&expand[]=tags&expand[]=gated")
+        rid, why = (recipe, None) if recipe else match_recipe(info, cat)
+        if not rid:
+            die(f"{repo} is {why}")
+        files = [x for x in hf_get(f"/api/models/{repo}/tree/main?recursive=true") if x.get("type") == "file"]
+        f = pick_weights(files, cat["recipes"][rid], path)
+        q = quant_label(Path(f["path"]).name)
+        author, base = repo.split("/")[0], re.sub(r"(?i)[-_ ]?gguf$", "", repo.split("/")[-1])
+        name = f"{base} ({author}{' ' + q if q else ''})"
+        license_ = (info.get("cardData") or {}).get("license")
+        return {"id": local_id(f"{author}-{base}-{q or Path(f['path']).stem}"), "name": name, "recipe": rid,
+                "file": {"repo": repo, "path": f["path"], "size": f.get("size"), "sha256": (f.get("lfs") or {}).get("oid")},
+                "license": license_ if isinstance(license_, str) else None, "source": f"{HF_BASE}/{repo}",
+                "gated": bool(info.get("gated"))}
+    if not recipe:
+        die("for a download link or a file, say which model family it is: --recipe "
+            + " | ".join(r for r in cat["recipes"]))
+    p = Path(spec).expanduser()
+    if p.is_file():
+        return {"id": local_id(p.stem), "name": p.stem, "recipe": recipe, "file": {"local": str(p.resolve()), "size": p.stat().st_size},
+                "source": str(p.resolve())}
+    if not re.match(r"^https?://", spec):
+        die(f"{spec!r} isn't a model in the list, a Hugging Face repo, a link or a file (see: imagegenkit local-models list)")
+    name = urllib.parse.unquote(Path(urllib.parse.urlparse(spec).path).name) or "model"
+    size = None
+    try:
+        with urllib.request.urlopen(urllib.request.Request(spec, method="HEAD", headers={"User-Agent": "imagegenkit"}), timeout=30) as r:
+            size = int(r.headers.get("Content-Length") or 0) or None
+    except (OSError, ValueError, http_client.HTTPException):
+        pass
+    return {"id": local_id(Path(name).stem), "name": Path(name).stem, "recipe": recipe,
+            "file": {"url": spec, "path": name, "size": size}, "source": spec}
+
+
+def cmd_local_list(a, cfg):
+    cat = local_catalog(refresh=getattr(a, "refresh", False))
+    reg = local_registry()
+    installed = [dict(m, ready=local_model_ready(m), family=cat["recipes"].get(m.get("recipe"), {}).get("name"))
+                 for m in reg["models"]]
+    ids = {m["id"] for m in installed if m["ready"]}
+    used = sum(f.stat().st_size for f in LOCAL_MODELS.rglob("*") if f.is_file()) if LOCAL_MODELS.exists() else 0
+    free = shutil.disk_usage(LOCAL_HOME if LOCAL_HOME.exists() else Path.home()).free
+    out = {"supported": apple_silicon(), "ram_gb": mac_ram_gb(),
+           "engine": {"installed": bool(local_engine()), "version": (reg.get("engine") or {}).get("version"),
+                      "latest": cat["engine"]["version"], "size": cat["engine"].get("size")},
+           "models": installed, "catalog": [dict(m, installed=m["id"] in ids) for m in cat["models"]],
+           "recipes": {k: {"name": r["name"], "edit": r.get("edit", False)} for k, r in cat["recipes"].items()},
+           "dir": str(LOCAL_MODELS), "bytes": used, "free": free}
+    if a.json:
+        print(json.dumps(out, indent=1))
+        return
+    print(f"Installed ({gb(used)} in {LOCAL_MODELS}):")
+    for m in installed:
+        print(f"  {m['id']:<28} {m['name']}" + ("" if m["ready"] else "  (files missing)"))
+    if not installed:
+        print("  none")
+    print("\nAvailable (imagegenkit local-models add <id>):")
+    for m in cat["models"]:
+        mark = "installed" if m["id"] in ids else gb(m.get("download"))
+        print(f"  {m['id']:<28} {m['name']:<18} {mark:<10} {m.get('note', '')}")
+    print("\nMore: imagegenkit local-models search <words>, or add any Hugging Face GGUF repo or link.")
+
+
+def cmd_local_search(a, cfg):
+    cat = local_catalog()
+    expand = ["downloads", "likes", "tags", "gated", "cardData", "gguf"]
+    found = {}
+    for tag in ("text-to-image", "image-to-image"):
+        q = [("search", a.query or ""), ("filter", "gguf"), ("pipeline_tag", tag), ("sort", "downloads"),
+             ("direction", "-1"), ("limit", str(a.limit))] + [("expand[]", e) for e in expand]
+        for m in hf_get("/api/models?" + urllib.parse.urlencode(q)):
+            found.setdefault(m["id"], m)
+    installed = {(m.get("file") or {}).get("repo") for m in local_registry()["models"]}
+    have = {Path(f).as_posix() for m in local_registry()["models"] for f in (m.get("files") or {}).values()}
+    lookups, rows = {}, []
+    for m in sorted(found.values(), key=lambda m: -(m.get("downloads") or 0))[: a.limit]:
+        rid, why = match_recipe(m, cat, lookups)
+        rec = cat["recipes"].get(rid) or {}
+        extra = sum(c["size"] for c in (cat["components"][cid] for cid in rec.get("slots", {}).values())
+                    if f"{c['repo']}/{c['path']}" not in have)
+        license_ = (m.get("cardData") or {}).get("license")
+        rows.append({"repo": m["id"], "author": m["id"].split("/")[0], "name": m["id"].split("/")[-1],
+                     "downloads": m.get("downloads") or 0, "likes": m.get("likes") or 0,
+                     "license": license_ if isinstance(license_, str) and license_ != "other" else None,
+                     "gated": bool(m.get("gated")), "recipe": rid, "family": rec.get("name"), "edit": bool(rec.get("edit")),
+                     "file": None, "quant": None, "size": None, "extra": extra if rid else None,
+                     "supported": bool(rid), "reason": why, "installed": m["id"] in installed})
+
+    def weights(row):  # the file `add` would download, so the size shown is the real one
+        try:
+            files = [x for x in hf_get(f"/api/models/{row['repo']}/tree/main?recursive=true") if x.get("type") == "file"]
+        except ApiError:
+            return
+        cands = weights_candidates(files, cat["recipes"][row["recipe"]])
+        if not cands:
+            row.update(supported=False, reason="no single weights file (it needs a .gguf)")
+            return
+        row.update(file=cands[0]["path"], quant=quant_label(Path(cands[0]["path"]).name), size=cands[0].get("size"))
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(weights, [r for r in rows if r["supported"]]))
+    if a.json:
+        print(json.dumps(rows, indent=1))
+        return
+    for r in rows:
+        status = f"{r['family']}, {gb((r['size'] or 0) + (r['extra'] or 0))} ({r['quant'] or 'file'})" if r["supported"] \
+            else f"not supported ({r['reason']})"
+        print(f"{r['repo']:<55} {r['downloads']:>9} downloads  {status}{'  [gated]' if r['gated'] else ''}")
+    if not rows:
+        print("nothing found")
+
+
+def cmd_local_add(a, cfg):
+    if not apple_silicon():
+        die("local models need a Mac with Apple silicon (M1 or newer)")
+    cat = local_catalog()
+    m = resolve_local(a.model, cat, a.recipe, a.file)
+    rec = cat["recipes"][m["recipe"]]
+    main_slot = rec.get("main", "diffusion_model")
+    f = m["file"]
+    if f.get("local"):
+        main_dest = Path(f["local"])
+        jobs = []
+    else:
+        main_dest = LOCAL_MODELS / (f["repo"] if f.get("repo") else "links/" + urllib.parse.urlparse(f["url"]).netloc) / f["path"]
+        url = hf_file_url(f["repo"], f["path"]) if f.get("repo") else f["url"]
+        jobs = [(m["name"], url, main_dest, f.get("size"), f.get("sha256"), bool(f.get("repo")))]
+    files = {main_slot: str(main_dest.relative_to(LOCAL_MODELS)) if not f.get("local") else str(main_dest)}
+    for slot, cid in rec.get("slots", {}).items():
+        c = cat["components"][cid]
+        dest = LOCAL_MODELS / c["repo"] / c["path"]
+        files[slot] = str(dest.relative_to(LOCAL_MODELS))
+        if not any(j[2] == dest for j in jobs):
+            jobs.append((Path(c["path"]).name, hf_file_url(c["repo"], c["path"]), dest, c["size"], c.get("sha256"), True))
+    need_engine = not local_engine()
+
+    def remaining(size, dest):
+        if dest.is_file():
+            return 0
+        part = dest.with_name(dest.name + ".part")
+        return max(0, (size or 0) - (part.stat().st_size if part.exists() else 0))
+
+    todo = [j for j in jobs if not (j[2].is_file() and (not j[3] or j[2].stat().st_size == j[3]))]
+    need = sum(remaining(j[3], j[2]) for j in todo) + (cat["engine"].get("size", 0) * 3 if need_engine else 0)
+    LOCAL_MODELS.mkdir(parents=True, exist_ok=True)
+    free = shutil.disk_usage(LOCAL_MODELS).free
+    if need and free - need < 5e9:  # keep 5 GB free: macOS starts clearing caches when the disk is nearly full
+        die(f"not enough disk space: {m['name']} needs {gb(need)}, {gb(free)} free (keep at least 5 GB free)")
+    if not (LOCAL_HOME / ".tm-excluded").exists():  # re-downloadable, keep them out of Time Machine
+        if subprocess.run(["tmutil", "addexclusion", str(LOCAL_MODELS)], capture_output=True).returncode == 0:
+            (LOCAL_HOME / ".tm-excluded").touch()
+    total = sum(j[3] or 0 for j in todo) + (cat["engine"].get("size", 0) if need_engine else 0)
+    progress = Progress(total, a.json)
+    progress.event(event="start", id=m["id"], name=m["name"], total=total)
+    if not a.json:
+        log(f"{m['name']}: {gb(total)} to download" if total else f"{m['name']}: files already here")
+    if need_engine:
+        install_engine(cat, progress)
+    for label, url, dest, size, sha, auth in todo:
+        fetch_file(url, dest, size, sha, progress, label, auth=auth)
+    progress.end()
+    entry = {"id": m["id"], "name": m["name"], "recipe": m["recipe"], "files": files, "source": m.get("source"),
+             "license": m.get("license"), "edit": bool(rec.get("edit")), "file": {k: v for k, v in f.items() if k != "local"},
+             "bytes": sum((local_path(p).stat().st_size if local_path(p).is_file() else 0) for p in files.values()),
+             "added": dt.datetime.now().isoformat(timespec="seconds")}
+    if f.get("local"):
+        entry["external"] = True
+    reg = local_registry()
+    reg["models"] = [x for x in reg["models"] if x["id"] != m["id"]] + [entry]
+    save_local_registry(reg)
+    enable_provider("local")
+    progress.event(event="done", model=entry)
+    if not a.json:
+        log(f"Ready: {m['name']}. Try: imagegenkit local \"a red mug on a wooden table\" -m {m['id']}")
+
+
+def cmd_local_remove(a, cfg):
+    reg = local_registry()
+    m = next((x for x in reg["models"] if a.model.lower() in (x["id"].lower(), x["name"].lower())), None)
+    if not m:
+        die(f"no local model {a.model} (see: imagegenkit local-models list)")
+    others = [x for x in reg["models"] if x is not m]
+    in_use = {str(local_path(p)) for x in others for p in (x.get("files") or {}).values()}
+    freed = 0
+    for rel in (m.get("files") or {}).values():
+        p = local_path(rel)
+        if str(p) in in_use or (m.get("external") and not str(p).startswith(str(LOCAL_MODELS))):
+            continue
+        for q in (p, p.with_name(p.name + ".part")):
+            if q.is_file():
+                freed += q.stat().st_size
+                q.unlink()
+        d = p.parent
+        while d != LOCAL_MODELS and str(d).startswith(str(LOCAL_MODELS)) and d.is_dir() and not any(d.iterdir()):
+            d.rmdir()
+            d = d.parent
+    reg["models"] = others
+    save_local_registry(reg)
+    data = read_user_config()
+    if ((data.get("provider_defaults") or {}).get("local") or {}).get("model") == m["id"]:
+        data["provider_defaults"]["local"].pop("model", None)
+        write_user_config(data)
+    if a.json:
+        print(json.dumps({"removed": m["id"], "freed": freed}))
+    else:
+        log(f"Removed {m['name']} ({gb(freed)} freed)")
+
+
+def local_size(a, recipe, refs):
+    """Width and height: --size, else --aspect (or the first reference's shape) at --resolution, in the family's steps."""
+    d = recipe.get("defaults") or {}
+    mult = recipe.get("multiple", 16)
+    if a.size and a.size != "auto":
+        m = re.fullmatch(r"(\d+)\s*x\s*(\d+)", a.size)
+        if not m:
+            die(f"bad --size {a.size!r}, expected WIDTHxHEIGHT")
+        w, h = int(m.group(1)), int(m.group(2))
+    else:
+        area = {"0.5K": 512 * 512, "1K": 1024 * 1024, "2K": 1536 * 1536}.get((a.resolution or "").upper(),
+                                                                          d.get("width", 1024) * d.get("height", 1024))
+        aspect = a.aspect or (image_aspect(refs[0]) if refs else None)
+        rw, rh = parse_aspect(aspect) if aspect else (d.get("width", 1024), d.get("height", 1024))
+        w, h = math.sqrt(area * rw / rh), math.sqrt(area * rh / rw)
+    w, h = max(mult, round(w / mult) * mult), max(mult, round(h / mult) * mult)
+    return w, h
+
+
+def run_local(a, cfg, spec, task):
+    """Generate on this Mac with stable-diffusion.cpp."""
+    prompt = read_prompt(a)
+    refs = check_refs(a.image)
+    note_unsupported(a, spec["label"], ["mask", "compression", "moderation", "quality"])
+    if a.background == "transparent":
+        raise Unavailable("local models can't make transparent images")
+    ready, why = local_readiness()
+    if not ready:
+        raise Unavailable(f"{why}. Download one in ImageGenKit › Settings › Providers › On this Mac, "
+                          "or: imagegenkit local-models add flux2-klein-4b")
+    models = local_models()
+    want = a.model or pref(cfg, spec, "model")
+    m = next((x for x in models if want and want.lower() in (x["id"].lower(), x["name"].lower())), None)
+    if want and not m and a.model:
+        die(f"local model {want} isn't downloaded (have: {', '.join(x['id'] for x in models)})")
+    if refs and not (m or {}).get("edit"):
+        m = next((x for x in models if x.get("edit")), None) if not a.model else m
+        if not m or not m.get("edit"):
+            raise Unavailable("no downloaded local model can edit images (FLUX.2 klein can: "
+                              "imagegenkit local-models add flux2-klein-4b)")
+    m = m or models[0]
+    cat = local_catalog()
+    rec = cat["recipes"].get(m["recipe"])
+    if not rec:
+        die(f"{m['name']}: unknown model family {m['recipe']} (try: imagegenkit update)")
+    d = rec.get("defaults") or {}
+    x = parse_extra(a.extra)
+    steps = int(x.get("steps") or d.get("steps") or 20)
+    cfg_scale = float(x.get("cfg") or d.get("cfg") or 1)
+    sampler = str(x.get("sampler") or d.get("sampler") or "euler")
+    seed = int(x["seed"]) if "seed" in x else random.randint(0, 2 ** 31 - 1)
+    w, h = local_size(a, rec, refs)
+    fmt = (a.format or "png").lower().replace("jpg", "jpeg")
+    ext = {"png": ".png", "jpeg": ".jpg", "webp": ".webp"}.get(fmt, ".png")
+    work = LOCAL_WORKDIR / uuid.uuid4().hex[:12]
+    work.mkdir(parents=True, exist_ok=True)
+    flags = {"model": "-m", "diffusion_model": "--diffusion-model", "llm": "--llm", "llm_vision": "--llm_vision",
+             "vae": "--vae", "clip_l": "--clip_l", "t5xxl": "--t5xxl"}
+    cmd = [local_engine()]
+    for slot, rel in m["files"].items():
+        cmd += [flags.get(slot, "--" + slot), str(local_path(rel))]
+    cmd += ["-p", prompt, "-W", str(w), "-H", str(h), "--steps", str(steps), "--cfg-scale", f"{cfg_scale:g}",
+            "--sampling-method", sampler, "-s", str(seed), "-b", str(a.n), "-o", str(work / f"image-%02d{ext}")]
+    if x.get("negative"):
+        cmd += ["-n", str(x["negative"])]
+    if x.get("flow_shift") or d.get("flow_shift"):
+        cmd += ["--flow-shift", f"{float(x.get('flow_shift') or d['flow_shift']):g}"]
+    if d.get("guidance") or x.get("guidance"):
+        cmd += ["--guidance", f"{float(x.get('guidance') or d['guidance']):g}"]
+    if rec.get("model_args"):
+        cmd += ["--model-args", rec["model_args"]]
+    for r in refs:
+        cmd += ["-r", str(r.resolve())]
+    log(f"{m['name']} on this Mac | {w}x{h} | {steps} steps | seed {seed}" + (f" | {len(refs)} ref(s)" if refs else ""))
+    if a.dry_run:
+        return log(" ".join(shlex.quote(c) for c in cmd))
+    t0 = time.time()
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, cwd=work)
+
+    def stop(signum, frame):  # the app quit or was cancelled: don't leave the engine running
+        proc.terminate()
+        sys.exit(128 + signum)
+
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, stop)
+    errors = []
+
+    def read_errors():
+        for line in iter(proc.stderr.readline, b""):
+            text = line.decode("utf-8", "replace").rstrip()
+            if text.startswith("[E]") or "error" in text.lower():
+                errors.append(re.sub(r"\s+---\s+\S+$", "", text[3:].strip() if text.startswith("[E]") else text))
+
+    reader = threading.Thread(target=read_errors, daemon=True)
+    reader.start()
+    buf, image, last_step, loaded = b"", 0, 0, False
+    while True:
+        chunk = proc.stdout.read1(4096) if hasattr(proc.stdout, "read1") else proc.stdout.read(4096)
+        if not chunk:
+            break
+        buf += chunk
+        parts = re.split(rb"[\r\n]", buf)
+        buf = parts.pop()
+        for raw in parts:
+            line = raw.decode("utf-8", "replace")
+            s = re.search(r"\|\s*(\d+)/(\d+)\s*-\s*([\d.]+)\s*(s/it|it/s)", line)
+            if s:
+                step, total = int(s.group(1)), int(s.group(2))
+                if step < last_step:
+                    image += 1
+                last_step = step
+                log(f"  step {step}/{total}" + (f" (image {image + 1} of {a.n})" if a.n > 1 else ""))
+            elif "MB/s" in line and not loaded:
+                loaded = True
+                log("  loading the model")
+            elif "decoding" in line and "latent" in line:
+                log("  decoding")
+            elif line.startswith("[E]"):
+                errors.append(re.sub(r"\s+---\s+\S+$", "", line[3:].strip()))
+    try:
+        code = proc.wait(timeout=LOCAL_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        die(f"the local model took longer than {LOCAL_TIMEOUT // 60} minutes")
+    reader.join(timeout=2)
+    files = sorted(p for p in work.iterdir() if p.suffix.lower() in MIME_BY_EXT)
+    if code != 0 or not files:
+        shutil.rmtree(work, ignore_errors=True)
+        detail = "; ".join(dict.fromkeys(errors))[-500:] or f"engine exit code {code}"
+        if code in (-9, 137) or re.search(r"out of memory|failed to allocate|insufficient memory", detail, re.I):
+            die(f"{m['name']} ran out of memory. Close other apps, try a smaller size (--resolution 0.5K), or use a smaller model")
+        die(f"{m['name']} couldn't make the image: {detail}")
+    images = [(p.read_bytes(), MIME_BY_EXT[p.suffix.lower()]) for p in files]
+    shutil.rmtree(work, ignore_errors=True)
+    finish(a, cfg, spec, task, m["name"], prompt,
+           {"model_id": m["id"], "size": f"{w}x{h}", "steps": steps, "cfg": cfg_scale, "sampler": sampler,
+            "seed": seed, "n": a.n}, refs, images, None, t0, {"engine": local_registry().get("engine", {}).get("version")})
+
+
 RUNNERS = {"openai": run_openai, "openai-compatible": run_openai, "xai": run_xai, "gemini": run_gemini,
            "grok-build": run_grok, "codex-cli": run_codex, "openrouter": run_openrouter, "together": run_together,
-           "fal": run_fal}
+           "fal": run_fal, "local": run_local}
 
 
 def api_message(spec, e):
@@ -1273,6 +2010,8 @@ def check_provider(spec, cfg):
     ok, why = readiness(spec)
     if not ok:
         return "missing", why
+    if spec["type"] == "local":
+        return local_check()
     if spec["type"] == "codex-cli":
         try:
             out = subprocess.run([codex_bin(), "login", "status"], capture_output=True, text=True, timeout=60,
@@ -1345,8 +2084,8 @@ def cmd_providers(a, cfg):
     for name, spec in provs.items():
         ready, why = readiness(spec)
         rows.append({"name": name, "label": spec["label"], "type": spec["type"], "builtin": spec["builtin"],
-                     "needs_key": spec["type"] not in SUBSCRIPTION_TYPES, "keychain": keychain_service(name)
-                     if spec["type"] not in SUBSCRIPTION_TYPES else None, "env": spec.get("env"), "ready": ready,
+                     "needs_key": spec["type"] not in KEYLESS_TYPES, "keychain": keychain_service(name)
+                     if spec["type"] not in KEYLESS_TYPES else None, "env": spec.get("env"), "ready": ready,
                      "status": why, "base_url": spec.get("base_url"), "model": spec.get("model"),
                      "key_url": spec.get("key_url")})
     if a.json:
@@ -1391,8 +2130,12 @@ def cmd_provider(a, cfg):
 def cmd_set_key(a, cfg):
     provs = all_providers(cfg)
     spec = provs.get(a.provider)
+    if a.provider == "huggingface":  # a token for gated or private local models
+        spec = {"type": "token", "label": "Hugging Face", "name": "huggingface"}
     if not spec:
         die(f"unknown provider {a.provider} (see: imagegenkit providers)")
+    if spec["type"] == "local":
+        die(f"{spec['label']} needs no key. Download a model with: imagegenkit local-models add flux2-klein-4b")
     if spec["type"] in SUBSCRIPTION_TYPES:
         die(f"{spec['label']} has no key. Log in with: {'grok login' if spec['type'] == 'grok-build' else 'codex login'}")
     if a.clipboard:
@@ -1402,16 +2145,19 @@ def cmd_set_key(a, cfg):
     elif a.stdin or not sys.stdin.isatty():
         key = sys.stdin.read().strip()
     else:
-        key = getpass.getpass(f"Paste {spec['label']} API key (input hidden): ").strip()
+        key = getpass.getpass(f"Paste {spec['label']} {'token' if spec['type'] == 'token' else 'API key'} (input hidden): ").strip()
     if not key or re.search(r'[\s"\\]', key):
         die("that does not look like an API key")
     service = keychain_service(a.provider)
     if not keychain_store(service, key, f"ImageGenKit {spec['label']} API key") or keychain_read(service) != key:
         die("could not store the key in the Keychain")
-    enable_provider(a.provider)
+    if spec["type"] != "token":
+        enable_provider(a.provider)
     if a.clipboard:
         subprocess.run(["pbcopy"], input="", text=True)
     print(f"Saved in Keychain as '{service}'.")
+    if spec["type"] == "token":
+        return
     if spec.get("env") and os.environ.get(spec["env"]):
         print(f"note: env {spec['env']} is set and takes precedence.")
     status, msg = check_provider(spec, load_config())
@@ -1668,6 +2414,27 @@ def main():
     p.add_argument("--edit-model")
     p.add_argument("--label")
     p.set_defaults(fn=cmd_provider)
+    p = sub.add_parser("local-models", help="models that run on this Mac: list, search, add, remove")
+    lsub = p.add_subparsers(dest="action", required=True, metavar="action")
+    q = lsub.add_parser("list", help="downloaded models and the ones you can add")
+    q.add_argument("--json", action="store_true")
+    q.add_argument("--refresh", action="store_true", help="reload the model list from GitHub")
+    q.set_defaults(fn=cmd_local_list)
+    q = lsub.add_parser("search", help="search Hugging Face for models this Mac can run")
+    q.add_argument("query", nargs="?", default="")
+    q.add_argument("--limit", type=int, default=30)
+    q.add_argument("--json", action="store_true")
+    q.set_defaults(fn=cmd_local_search)
+    q = lsub.add_parser("add", help="download a model: an id from the list, a Hugging Face repo or link, a link or a file")
+    q.add_argument("model")
+    q.add_argument("--recipe", help="model family, for links and files (see: local-models list --json)")
+    q.add_argument("--file", help="which file of a Hugging Face repo (default: a 4-bit .gguf)")
+    q.add_argument("--json", action="store_true", help="progress as JSON lines")
+    q.set_defaults(fn=cmd_local_add)
+    q = lsub.add_parser("remove", help="delete a downloaded model (shared files stay while another model uses them)")
+    q.add_argument("model")
+    q.add_argument("--json", action="store_true")
+    q.set_defaults(fn=cmd_local_remove)
     p = sub.add_parser("models", help="image models a provider's key can use (openai, xai, custom)")
     p.add_argument("provider", nargs="?")
     p.set_defaults(fn=cmd_models)

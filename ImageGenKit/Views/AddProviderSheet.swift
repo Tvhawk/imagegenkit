@@ -43,6 +43,8 @@ struct AddProviderSheet: View {
                 AddProviderPicker(choose: { t in withAnimation(.snappy(duration: 0.25)) { page = .setup(t) } },
                                   custom: { withAnimation(.snappy(duration: 0.25)) { page = .custom(nil) } },
                                   cancel: { dismiss() })
+            case .setup(let t) where t.info.kind == .local:
+                LocalModelsPage(back: route == .add ? { withAnimation(.snappy(duration: 0.25)) { page = .pick } } : nil)
             case .setup(let t):
                 AddProviderSetup(target: t, back: route == .add ? { withAnimation(.snappy(duration: 0.25)) { page = .pick } } : nil)
             case .custom(let id):

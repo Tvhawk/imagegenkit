@@ -115,5 +115,203 @@ class CLITests(unittest.TestCase):
         self.assertLess(igk.version_tuple("1.0.9"), igk.version_tuple("1.0.10"))
 
 
+class FileHandler(BaseHTTPRequestHandler):
+    """Serves FileHandler.files[path] with Range support (model downloads)."""
+    files = {}
+    ignore_range = False
+
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        data = FileHandler.files.get(self.path.split("?")[0])
+        if data is None:
+            self.send_response(404)
+            self.end_headers()
+            return
+        start = 0
+        rng = self.headers.get("Range")
+        if rng and not FileHandler.ignore_range:
+            start = int(rng.split("=")[1].split("-")[0])
+            self.send_response(206)
+        else:
+            self.send_response(200)
+        self.send_header("Content-Length", str(len(data) - start))
+        self.end_headers()
+        self.wfile.write(data[start:])
+
+
+class LocalModelTests(unittest.TestCase):
+    """On this Mac: catalog, picking files, family matching, downloads, and a run with a fake engine."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = HTTPServer(("127.0.0.1", 0), FileHandler)
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        cls.base = f"http://127.0.0.1:{cls.server.server_port}"
+        cls.cat = igk.local_catalog()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def test_catalog_is_consistent(self):
+        cat = self.cat
+        self.assertTrue(cat["engine"]["url"].startswith("https://github.com/leejet/stable-diffusion.cpp/"))
+        self.assertEqual(len(cat["engine"]["sha256"]), 64)
+        for rid, r in cat["recipes"].items():
+            for slot, cid in r.get("slots", {}).items():
+                self.assertIn(cid, cat["components"], f"{rid}.{slot}")
+            self.assertTrue(r["base"], rid)
+        for m in cat["models"]:
+            self.assertIn(m["recipe"], cat["recipes"])
+            self.assertEqual(len(m["file"]["sha256"]), 64)
+            self.assertGreater(m["download"], m["file"]["size"])
+
+    def test_picks_a_4bit_weights_file(self):
+        files = [{"path": p, "size": s} for p, s in [("model-Q8_0.gguf", 8), ("model-F16.gguf", 16), ("model-Q4_K_M.gguf", 4),
+                                                      ("mmproj-Q8_0.gguf", 1), ("model-Q3_K_M.gguf", 3), ("README.md", 1)]]
+        self.assertEqual(igk.pick_weights(files, {"main": "diffusion_model"})["path"], "model-Q4_K_M.gguf")
+        self.assertEqual(igk.quant_label("flux-2-klein-4b-Q4_0.gguf"), "Q4_0")
+        self.assertEqual(igk.quant_label("Qwen2.5-VL-7B-Instruct.Q4_K_M.gguf"), "Q4_K_M")
+        single = [{"path": "sd_xl_turbo_1.0_fp16.safetensors", "size": 6.9e9}, {"path": "unet/x.safetensors", "size": 5e9},
+                  {"path": "vae.safetensors", "size": 3e8}]
+        self.assertEqual(igk.pick_weights(single, {"main": "model"})["path"], "sd_xl_turbo_1.0_fp16.safetensors")
+        self.assertEqual(igk.weights_candidates(single, {"main": "diffusion_model"}), [])
+
+    def test_matches_families_through_fine_tunes(self):
+        cat = self.cat
+        quant = {"id": "a/klein-gguf", "tags": ["gguf", "base_model:quantized:black-forest-labs/FLUX.2-klein-4B"]}
+        self.assertEqual(igk.match_recipe(quant, cat)[0], "flux2-klein-4b")
+        lora = {"id": "a/lora", "tags": ["base_model:adapter:black-forest-labs/FLUX.2-klein-4B"]}
+        self.assertIsNone(igk.match_recipe(lora, cat)[0])
+        real = igk.hf_get
+        igk.hf_get = lambda path: {"cardData": {"base_model": "Tongyi-MAI/Z-Image-Turbo"}, "tags": []}
+        try:
+            tune = {"id": "a/tune-gguf", "cardData": {"base_model": ["someone/z-image-finetune"]}, "tags": []}
+            self.assertEqual(igk.match_recipe(tune, cat, {})[0], "z-image-turbo")
+        finally:
+            igk.hf_get = real
+        self.assertIsNone(igk.match_recipe({"id": "x/y", "tags": []}, cat)[0])
+
+    def test_sizes_follow_the_family_grid(self):
+        rec = {"multiple": 16, "defaults": {"width": 1024, "height": 1024}}
+        self.assertEqual(igk.local_size(args(aspect="16:9", resolution="1K"), rec, []), (1360, 768))
+        self.assertEqual(igk.local_size(args(resolution="0.5K"), rec, []), (512, 512))
+        self.assertEqual(igk.local_size(args(size="1000x700"), rec, []), (992, 704))
+        self.assertEqual(igk.local_size(args(), {"multiple": 64, "defaults": {"width": 512, "height": 512}}, []), (512, 512))
+
+    def test_resolves_curated_ids_and_hugging_face_links(self):
+        m = igk.resolve_local("FLUX.2 klein 4B", self.cat)
+        self.assertEqual(m["id"], "flux2-klein-4b")
+        real = igk.hf_get
+
+        def fake(path):
+            if "/tree/" in path:
+                return [{"type": "file", "path": "x-Q8_0.gguf", "size": 8, "lfs": {"oid": "a" * 64}},
+                        {"type": "file", "path": "x-Q4_K_M.gguf", "size": 4, "lfs": {"oid": "b" * 64}}]
+            return {"id": "me/x-GGUF", "tags": ["base_model:quantized:black-forest-labs/FLUX.2-klein-4B"],
+                    "cardData": {"license": "apache-2.0"}}
+        igk.hf_get = fake
+        try:
+            m = igk.resolve_local("https://huggingface.co/me/x-GGUF", self.cat)
+            self.assertEqual((m["recipe"], m["file"]["path"], m["name"], m["license"]),
+                             ("flux2-klein-4b", "x-Q4_K_M.gguf", "x (me Q4_K_M)", "apache-2.0"))
+            self.assertEqual(m["id"], "me-x-q4-k-m")
+            m = igk.resolve_local("https://huggingface.co/me/x-GGUF/blob/main/x-Q8_0.gguf", self.cat)
+            self.assertEqual(m["file"]["path"], "x-Q8_0.gguf")
+            self.assertEqual(igk.resolve_local("me/x-GGUF", self.cat)["file"]["sha256"], "b" * 64)
+        finally:
+            igk.hf_get = real
+
+    def test_downloads_resume_and_are_verified(self):
+        data = os.urandom(300_000)
+        FileHandler.files["/m.gguf"] = data
+        dest = Path(HOME) / "dl" / "m.gguf"
+        part = dest.with_name("m.gguf.part")
+        part.parent.mkdir(parents=True, exist_ok=True)
+        part.write_bytes(data[:100_000])  # an earlier, interrupted download
+        sha = igk.hashlib.sha256(data).hexdigest()
+        progress = igk.Progress(len(data), True)
+        out = io_capture(lambda: igk.fetch_file(f"{self.base}/m.gguf", dest, len(data), sha, progress, "m"))
+        self.assertEqual(dest.read_bytes(), data)
+        self.assertFalse(part.exists())
+        self.assertEqual(json.loads(out.strip().splitlines()[-1])["done"], len(data))
+        # A server that ignores the range starts over; a wrong checksum deletes the file.
+        FileHandler.ignore_range = True
+        dest.unlink()
+        part.write_bytes(data[:50_000])
+        try:
+            io_capture(lambda: igk.fetch_file(f"{self.base}/m.gguf", dest, len(data), sha, igk.Progress(len(data), True), "m"))
+        finally:
+            FileHandler.ignore_range = False
+        self.assertEqual(dest.read_bytes(), data)
+        dest.unlink()
+        with self.assertRaises(igk.ApiError):
+            io_capture(lambda: igk.fetch_file(f"{self.base}/m.gguf", dest, len(data), "0" * 64, igk.Progress(len(data), True), "m"))
+        self.assertFalse(dest.exists() or part.exists())
+
+    def test_generates_with_the_engine(self):
+        """A fake sd-cli: checks the flags, prints progress like the real one and writes the image."""
+        engine = Path(HOME) / "fake-sd-cli"
+        engine.write_text("#!/usr/bin/env python3\n"
+                          "import sys, base64\n"
+                          "a = sys.argv\n"
+                          "assert '--diffusion-model' in a and '--llm' in a and '--vae' in a, a\n"
+                          "assert a[a.index('--steps') + 1] == '4' and a[a.index('-W') + 1] == '1360', a\n"
+                          "sys.stdout.write('  |####| 10/10 - 300.0MB/s\\n')\n"
+                          "for i in range(1, 5): sys.stdout.write(f'\\r  |===>  | {i}/4 - 1.20s/it')\n"
+                          "sys.stdout.write('\\n[I] decoding 1 latents\\n')\n"
+                          "out = a[a.index('-o') + 1].replace('%02d', '00')\n"
+                          f"open(out, 'wb').write(base64.b64decode('{base64.b64encode(PNG).decode()}'))\n")
+        engine.chmod(0o755)
+        models = igk.LOCAL_MODELS
+        files = {"diffusion_model": "t/d.gguf", "llm": "t/l.gguf", "vae": "t/v.safetensors"}
+        for rel in files.values():
+            (models / rel).parent.mkdir(parents=True, exist_ok=True)
+            (models / rel).write_bytes(b"x")
+        igk.save_local_registry({"engine": {"version": "test"}, "models": [
+            {"id": "flux2-klein-4b", "name": "FLUX.2 klein 4B", "recipe": "flux2-klein-4b", "files": files, "edit": True}]})
+        os.environ["IMAGEGENKIT_SD_CLI"] = str(engine)
+        real_arm = igk.apple_silicon
+        igk.apple_silicon = lambda: True
+        try:
+            self.assertEqual(igk.local_readiness(), (True, "1 model"))
+            spec = igk.all_providers(igk.load_config())["local"]
+            out = Path(HOME) / "local-out.png"
+            err = stderr_capture(lambda: igk.run_local(args(aspect="16:9", resolution="1K", out=str(out)), igk.load_config(), spec, None))
+            self.assertEqual(out.read_bytes(), PNG)
+            self.assertIn("step 4/4", err)
+            self.assertIn("loading the model", err)
+            entry = json.loads(igk.LOG_FILE.read_text().splitlines()[-1])
+            self.assertEqual((entry["provider"], entry["type"], entry["params"]["size"]), ("local", "local", "1360x768"))
+            self.assertEqual(igk.estimate_cost(entry, igk.load_config()), 0)
+            with self.assertRaises(igk.Unavailable):  # transparency isn't something these models do
+                igk.run_local(args(background="transparent"), igk.load_config(), spec, None)
+        finally:
+            del os.environ["IMAGEGENKIT_SD_CLI"]
+            igk.apple_silicon = real_arm
+            igk.save_local_registry({"models": []})
+            igk.LOG_FILE.unlink()
+
+
+def io_capture(fn):
+    import contextlib
+    import io
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        fn()
+    return buf.getvalue()
+
+
+def stderr_capture(fn):
+    import contextlib
+    import io
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(io.StringIO()):
+        fn()
+    return buf.getvalue()
+
+
 if __name__ == "__main__":
     unittest.main()

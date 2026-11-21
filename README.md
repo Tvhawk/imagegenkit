@@ -5,7 +5,7 @@
 <h1 align="center">ImageGenKit</h1>
 
 <p align="center">
-  AI images on your Mac with the accounts you already have: ChatGPT, Grok, OpenAI, Gemini and more.<br>
+  AI images on your Mac with the accounts you already have: ChatGPT, Grok, OpenAI, Gemini and more, or free open models that run on your Mac.<br>
   Make images by hand, see everything you made and what it cost, and let Claude Code or Codex make images for you.
 </p>
 
@@ -22,6 +22,7 @@
 
 - **Easy setup.** A short welcome tour finds what's already on your Mac (Grok or Codex logged in, saved API keys, Claude Code, Codex) and connects it in one click. If nothing is there, it asks simple questions ("I pay for ChatGPT", "I pay for Grok", "I have an API key") and walks you through the rest.
 - **Use your subscriptions.** Make images with your ChatGPT plan (through Codex) or your Grok plan (through Grok Build), with no API key and no per-image bill.
+- **Or run models on your Mac.** "On this Mac" downloads open models like FLUX.2 klein and Z-Image Turbo with one click and runs them right on your Mac: free, private, and they work offline. Search Hugging Face for more, or paste a link. Needs Apple silicon.
 - **Or bring an API key.** OpenAI, Google Gemini, xAI, OpenRouter, Recraft, Together AI, fal.ai, or any OpenAI-compatible API, each with a step-by-step guide to get a key. Keys stay in your macOS Keychain.
 - **Generate by hand.** Write a prompt, add reference images, pick a provider, and set only the options that provider supports.
 - **Gallery and history.** Everything you or your agents made, with prompts, sizes, costs and files. Use any image as a reference for the next one.
@@ -78,7 +79,9 @@ imagegenkit draft "a cozy reading nook, warm light" -o nook.jpg   # quick, cheap
 imagegenkit final "product photo of a red mug on marble" -o mug.png --aspect 4:5
 imagegenkit edit "same mug on a wooden table" -i mug.png -o mug-wood.png
 imagegenkit transparent "flat sticker of a smiling sun" -o sun.png
-imagegenkit codex "..."                        # one provider directly (openai, grok, codex, gemini, ...)
+imagegenkit codex "..."                        # one provider directly (openai, grok, codex, gemini, local, ...)
+imagegenkit local "..." -m z-image-turbo       # on this Mac, free
+imagegenkit local-models list | search klein | add flux2-klein-4b | remove <id>
 imagegenkit providers                          # what's set up, order, task routing
 imagegenkit check                              # live check of keys and logins
 imagegenkit usage                              # this month's spend, images and limits
@@ -103,6 +106,7 @@ Saved paths go to stdout. Every run is logged to `~/.config/imagegenkit/log.json
 | Together AI | API key | Untested |
 | fal.ai | API key | Untested |
 | Any OpenAI-compatible API | API key | Custom |
+| On this Mac | Nothing: downloads open models (Apple silicon) | Tested |
 
 "Untested" means we haven't made real images with it yet. The provider list lives in [`catalog/providers.json`](catalog/providers.json). Pull requests that add, fix or test providers are welcome.
 
@@ -112,9 +116,22 @@ Saved paths go to stdout. Every run is logged to `~/.config/imagegenkit/log.json
 - **New models show up right away** in the model menus (Settings › Images and Generate) as soon as your key can use them; the app asks the provider for its current list.
 - **Your choice always wins**: pick or type any model ID per provider in Settings, set `provider_defaults.<provider>.model` in the config, or pass `-m <model>` on the command line. `imagegenkit models openai` lists what your key can use.
 
+## On this Mac
+
+Open image models that run on your Mac with [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) (MIT, Metal). No account, no cost per image, and nothing leaves your Mac.
+
+- **One click.** Pick a model in Settings › Providers › On this Mac and click Download. The engine comes along with the first model. Every file is checked against its SHA-256, and a stopped download continues where it left off.
+- **Examples:** FLUX.2 klein 4B (5.3 GB, makes and edits images), Z-Image Turbo (6.7 GB, best photos), FLUX.1 schnell and Qwen-Image Edit. All Apache 2.0.
+- **Any compatible model.** Search Hugging Face from the app (or `imagegenkit local-models search`). Results show only models whose family the engine runs, with the real download size. Fine-tunes are matched to their family through `base_model`. You can also paste a Hugging Face repo or file link, or any download link (`--recipe` names the family on the command line).
+- **Shared files.** Text encoders and VAEs are downloaded once and shared by the models that use them. Models live in `~/.local/share/imagegenkit/models` and are kept out of Time Machine.
+- **Edits** work with models marked "Edits" (FLUX.2 klein, FLUX.3 klein, Qwen-Image Edit): add reference images in Generate, or `imagegenkit edit -p local -i photo.png`.
+- **Gated models** (FLUX.1 dev and others) need a Hugging Face token: accept the model's terms on huggingface.co, then `imagegenkit set-key huggingface`.
+
+The engine build, the example models and the model families are listed in [`catalog/local.json`](catalog/local.json), which updates without a new app version.
+
 ## Privacy
 
-Everything stays on your Mac. API keys are stored in the macOS Keychain and are only sent to the provider you choose. The app talks to GitHub only to check for updates and to refresh the provider list.
+Everything stays on your Mac. API keys are stored in the macOS Keychain and are only sent to the provider you choose. The app talks to GitHub only to check for updates and to refresh the provider list, and to Hugging Face only when you search for or download a local model. Images made "On this Mac" never leave it.
 
 ## Support
 

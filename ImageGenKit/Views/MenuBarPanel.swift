@@ -176,9 +176,9 @@ private struct MenuBarProvidersCard: View {
                         Text("\(row.images)")
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
-                        Text(row.subscription ? "Plan" : Format.usd(row.cost))
+                        Text(row.costLabel ?? Format.usd(row.cost))
                             .monospacedDigit()
-                            .foregroundStyle(row.subscription ? .secondary : .primary)
+                            .foregroundStyle(row.costLabel != nil ? .secondary : .primary)
                             .frame(minWidth: 52, alignment: .trailing)
                     }
                     .font(.callout)

@@ -7,7 +7,7 @@ enum GenerateSpec {
 
     static func aspects(_ kind: ProviderKind) -> [String] {
         switch kind {
-        case .openai, .compatible, .together, .fal: [auto, "1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"]
+        case .openai, .compatible, .together, .fal, .local: [auto, "1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"]
         case .openrouter: [auto, "1:1", "3:2", "2:3", "4:3", "3:4", "4:5", "5:4", "16:9", "9:16", "21:9"]
         case .grokBuild: [auto, "1:1", "16:9", "9:16", "3:2", "2:3"]
         case .codex: [auto, "1:1", "3:2", "2:3"]
@@ -20,6 +20,7 @@ enum GenerateSpec {
         switch kind {
         case .grokBuild, .codex: []
         case .xai: ["1K", "2K"]
+        case .local: ["0.5K", "1K", "2K"]
         default: ["1K", "2K", "4K"]
         }
     }
@@ -48,6 +49,7 @@ enum GenerateSpec {
         switch kind {
         case .openai, .openrouter: ["png", "jpeg", "webp"]
         case .together, .fal: ["png", "jpeg"]
+        case .local: ["png", "jpeg", "webp"]
         default: []
         }
     }
@@ -91,10 +93,13 @@ enum GenerateSpec {
         case .compatible, .openrouter, .together, .fal:
             [config.providerDefault(p.id, "model"), (editing ? p.editModel : nil) ?? p.model ?? ""].first { !$0.isEmpty } ?? ""
         case .grokBuild, .codex: ""
+        case .local:
+            [config.providerDefault(p.id, "model"), LocalModels.shared.readyModels.first?.name ?? ""].first { !$0.isEmpty } ?? ""
         }
     }
 
     static func modelSuggestions(_ p: ProviderInfo, catalog: Catalog, config: ConfigStore) -> [String] {
+        if p.kind == .local { return LocalModels.shared.readyModels.map(\.name) }
         var list = catalog.entry(p.catalogID ?? p.id)?.models ?? []
         for m in LiveModels.shared.models[p.id] ?? [] where !list.contains(m) { list.append(m) }
         for m in [defaultModel(p, config: config, editing: false), defaultModel(p, config: config, editing: true)]
@@ -179,5 +184,30 @@ nonisolated enum GenerateImageLoader {
                                          kCGImageSourceCreateThumbnailWithTransform: true]
             return CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
         }.value
+    }
+}
+
+/// Progress of a local model run, from the CLI's stderr ("  loading the model", "  step 3/8 (image 1 of 2)", "  decoding").
+struct GenerateProgress: Equatable {
+    let text: String
+    let fraction: Double?
+
+    init?(line: String, images: Int) {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        if t == "loading the model" {
+            text = "Loading model"
+            fraction = nil
+        } else if t == "decoding" {
+            text = "Finishing"
+            fraction = 1
+        } else if let m = t.firstMatch(of: /^step (\d+)\/(\d+)(?: \(image (\d+) of (\d+)\))?/),
+                  let step = Int(m.1), let total = Int(m.2), total > 0 {
+            let image = m.3.flatMap { Int($0) } ?? 1
+            let n = max(1, m.4.flatMap { Int($0) } ?? images)
+            text = n > 1 ? "Image \(image) of \(n) · Step \(step) of \(total)" : "Step \(step) of \(total)"
+            fraction = (Double(image - 1) * Double(total) + Double(step)) / (Double(n) * Double(total))
+        } else {
+            return nil
+        }
     }
 }

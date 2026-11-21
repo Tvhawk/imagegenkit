@@ -33,7 +33,7 @@ nonisolated struct CatalogProvider: Identifiable, Hashable, Sendable {
     let modelPrices: [String: [String: Double]]
 
     var needsKey: Bool { auth == "key" }
-    var isBuiltin: Bool { ["openai", "grok", "codex", "xai", "gemini"].contains(id) }
+    var isBuiltin: Bool { ["openai", "grok", "codex", "xai", "gemini", "local"].contains(id) }
 
     init?(_ d: [String: Any]) {
         guard let id = d["id"] as? String, let name = d["name"] as? String, let adapter = d["adapter"] as? String else { return nil }

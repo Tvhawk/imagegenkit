@@ -3,7 +3,7 @@ name: imagegenkit
 description: Generate or edit images with the local `imagegenkit` command (ImageGenKit). Use it whenever the user asks to create, generate, render, mock up or edit an image, or a task needs a raster image asset (photos, product shots, thumbnails, mockups, icons, illustrations, backgrounds, app/store assets, transparent PNGs, restyles, combining reference images).
 metadata:
   managed-by: ImageGenKit
-  version: 1.0.3
+  version: 1.1.0
 ---
 
 # Images with `imagegenkit`
@@ -20,7 +20,9 @@ imagegenkit transparent "PROMPT" -o out.png    # transparent PNG: logo, sticker,
 ```
 
 Common options: `--aspect 16:9`, `-n 2`, `-i ref.png`, `-f prompt.txt`, `--dry-run`. Run `imagegenkit <task> -h` for more.
-Only if the user asks for a specific provider: `imagegenkit openai|grok|codex|xai|gemini|<other> "PROMPT"` or `imagegenkit draft -p openai ...`.
+Only if the user asks for a specific provider: `imagegenkit openai|grok|codex|xai|gemini|local|<other> "PROMPT"` or `imagegenkit draft -p openai ...`.
+
+**On this Mac (`local`):** free open models that run on the user's Mac (no key, nothing leaves the Mac, slower: about a minute per image). Use it when the user asks for local, private or free images. `imagegenkit local-models list` shows what's downloaded; `-m <id>` picks one (`z-image-turbo` for photos, `flux2-klein-4b` also edits with `-i`). Ask before downloading a model (`imagegenkit local-models add <id>`): they are several GB.
 
 ## Rules
 
@@ -32,7 +34,7 @@ Only if the user asks for a specific provider: `imagegenkit openai|grok|codex|xa
 - **Project assets:** write straight into the project's asset folder with a sensible name. Don't overwrite existing files unless asked. Existing outputs are never overwritten; imagegenkit adds `-2`, `-3` and so on.
 - **Prompts:** 2–5 sentences of plain prose covering subject, setting, style, composition and light. Put required text in quotes. For edits, say what must stay unchanged.
 - **Errors:** read the provider's message and adjust; don't retry blindly. A moderation block means stop and tell the user.
-- **Monthly limits:** the user can set a spend or image limit in ImageGenKit. If imagegenkit says a limit is reached, tell the user and don't work around it (no `-p` to another provider, no raw API calls). Subscriptions (Grok, Codex) keep working; task commands switch to them by themselves. `imagegenkit usage` shows this month's spend and limits.
+- **Monthly limits:** the user can set a spend or image limit in ImageGenKit. If imagegenkit says a limit is reached, tell the user and don't work around it (no `-p` to another provider, no raw API calls). Subscriptions (Grok, Codex) and On this Mac keep working; task commands switch to them by themselves. `imagegenkit usage` shows this month's spend and limits.
 
 ## Output
 

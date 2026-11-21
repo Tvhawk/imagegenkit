@@ -34,6 +34,7 @@ struct GenerateView: View {
     @State private var error: GenerateError?
     @State private var showDetails = false
     @State private var dropTargeted = false
+    @State private var progress: GenerateProgress?
     @FocusState private var promptFocused: Bool
 
     enum Phase: Equatable {
@@ -80,7 +81,22 @@ struct GenerateView: View {
 
     private var options: GenerateOptions {
         GenerateOptions(aspect: aspect, size: size, count: count, quality: quality, background: background,
-                        format: format, compression: compression, moderation: moderation, model: model)
+                        format: format, compression: compression, moderation: moderation,
+                        model: provider?.kind == .local ? localModel : model)
+    }
+
+    /// Local models the current request can use (only ones that edit when there are references).
+    private var localChoices: [LocalModels.Model] {
+        let ready = LocalModels.shared.readyModels
+        return refs.isEmpty ? ready : ready.filter(\.edit)
+    }
+
+    /// The local model to run: the picked one if it fits, else the default, else the first that fits.
+    private var localModel: String {
+        let names = localChoices.map(\.name)
+        if names.contains(model) { return model }
+        let fallback = provider.map { GenerateSpec.defaultModel($0, config: config, editing: !refs.isEmpty) } ?? ""
+        return names.contains(fallback) ? fallback : names.first ?? ""
     }
 
     /// Loads a provider's options: this session's edits, else its saved defaults.
@@ -148,6 +164,7 @@ struct GenerateView: View {
                 await status.refresh(config.providers)
             }
             if refs.isEmpty == false || prompt.isEmpty { promptFocused = true }
+            if status.state("local").isReady { await LocalModels.shared.refresh(installer: installer) }
             #if DEBUG
             debugState()
             #endif
@@ -341,6 +358,13 @@ struct GenerateView: View {
                     }
                 }
                 .generateEnter(1)
+                if provider.kind == .local {
+                    GridRow {
+                        rowLabel("Model")
+                        localModelPicker
+                    }
+                    .generateEnter(1)
+                }
                 GridRow {
                     rowLabel("Aspect")
                     let aspects = GenerateSpec.aspects(provider.kind)
@@ -369,6 +393,22 @@ struct GenerateView: View {
                 .generateEnter(4)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder private var localModelPicker: some View {
+        let choices = localChoices
+        if choices.isEmpty {
+            Text(refs.isEmpty ? "No model downloaded" : "No downloaded model can edit images")
+                .font(.callout)
+                .foregroundStyle(.orange)
+        } else {
+            Picker("Model", selection: Binding(get: { localModel }, set: { model = $0 })) {
+                ForEach(choices) { m in Text(m.name).tag(m.name) }
+            }
+            .labelsHidden()
+            .fixedSize()
+            .help(refs.isEmpty ? "Models on this Mac" : "Models on this Mac that can edit images")
         }
     }
 
@@ -439,7 +479,7 @@ struct GenerateView: View {
                     row("Mask") { maskControl }
                 }
             }
-            if GenerateSpec.hasModel(p.kind) {
+            if GenerateSpec.hasModel(p.kind) && p.kind != .local {
                 if !qualities.isEmpty || !backgrounds.isEmpty || !formats.isEmpty { divider }
                 row("Model") { modelField(p) }
             }
@@ -564,7 +604,16 @@ struct GenerateView: View {
                     }
                 }
             case .running:
-                Text("Keeps running if you close this.").foregroundStyle(.tertiary)
+                if let progress {
+                    HStack(spacing: 10) {
+                        if let f = progress.fraction {
+                            ProgressView(value: f).frame(width: 90)
+                        }
+                        Text(progress.text).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                } else {
+                    Text("Keeps running if you close this.").foregroundStyle(.tertiary)
+                }
             case .done:
                 Button { phase = .compose } label: {
                     Label("Edit", systemImage: "pencil")
@@ -601,7 +650,7 @@ struct GenerateView: View {
         if background == "transparent", GenerateSpec.backgrounds(p.kind).contains(background) { parts.append("Transparent") }
         if format != "png", GenerateSpec.formats(p.kind).contains(format) { parts.append(GenerateSpec.formatLabel(format)) }
         let m = model.trimmingCharacters(in: .whitespaces)
-        if GenerateSpec.hasModel(p.kind), !m.isEmpty { parts.append(m) }
+        if GenerateSpec.hasModel(p.kind), p.kind != .local, !m.isEmpty { parts.append(m) }
         return parts.joined(separator: " · ")
     }
 
@@ -614,9 +663,15 @@ struct GenerateView: View {
         let start = Date()
         error = nil
         showDetails = false
+        progress = nil
         phase = .running(start)
+        let count = options.count
         Task {
-            let r = await installer.runCLI(args, stdin: text)
+            let r = await installer.streamCLI(args, stdin: text) { line, isError in
+                guard isError, let p = GenerateProgress(line: line, images: count) else { return }
+                Task { @MainActor in progress = p }
+            }
+            progress = nil
             let urls = GenerateOutcome.images(r.stdout)
             store.poll()
             if r.status == 0 && !urls.isEmpty {
@@ -654,7 +709,7 @@ struct GenerateView: View {
 
     #if DEBUG
     /// `-debugGenerateState results|running|error`, `-debugGenerateCount N`, `-debugGenerateRefs N`,
-    /// `-debugGenerateMore YES`, `-debugGeneratePrompt "…"` (screenshots).
+    /// `-debugGenerateMore YES`, `-debugGeneratePrompt "…"`, `-debugGenerateRun YES` (screenshots and tests).
     private func debugState() {
         switch UserDefaults.standard.string(forKey: "debugGenerateState") {
         case "results":
@@ -675,6 +730,10 @@ struct GenerateView: View {
         if refCount > 0 { refs = Array(latest.dropFirst(4).prefix(refCount)) }
         if UserDefaults.standard.bool(forKey: "debugGenerateMore") {
             Task { try? await Task.sleep(for: .seconds(1)); showMore = true }
+        }
+        // `-debugGenerateRun YES`: starts generating (tests the progress line with a local model).
+        if UserDefaults.standard.bool(forKey: "debugGenerateRun") {
+            Task { try? await Task.sleep(for: .seconds(1.5)); generate() }
         }
     }
     #endif

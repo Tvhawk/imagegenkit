@@ -60,7 +60,9 @@ struct HistoryView: View {
             .width(min: 70, ideal: 85)
             TableColumn("Cost", value: \.cost) { row in
                 Group {
-                    if row.cost >= 0 {
+                    if row.entry.isLocal {
+                        Text("Free").foregroundStyle(.secondary).help("Made on this Mac")
+                    } else if row.cost >= 0 {
                         Text(HistoryFormat.cost(row.cost)).monospacedDigit()
                     } else {
                         Text("Plan").foregroundStyle(.secondary).help("Covered by your subscription")

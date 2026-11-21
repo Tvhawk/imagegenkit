@@ -94,6 +94,8 @@ nonisolated struct LogEntry: Identifiable, Sendable, Hashable {
     }
 
     var isSubscription: Bool { type == "grok-build" || type == "codex-cli" }
+    /// Made on this Mac with a local model (free).
+    var isLocal: Bool { type == "local" }
 
     /// A shell command that runs the same request again.
     var rerunCommand: String {
@@ -101,6 +103,10 @@ nonisolated struct LogEntry: Identifiable, Sendable, Hashable {
         for r in refs { parts += ["-i", shellQuote(r)] }
         if type == "grok-build" {
             if let a = param("aspect"), a != "null" { parts += ["--aspect", a] }
+        } else if type == "local" {
+            if let s = param("size") { parts += ["--size", s] }
+            parts += ["-m", shellQuote(param("model_id") ?? model)]
+            if let seed = param("seed") { parts += ["--extra", "seed=\(seed)"] }  // the same picture again
         } else {
             if let s = param("size") { parts += ["--size", s] }
             for key in ["quality", "background"] {

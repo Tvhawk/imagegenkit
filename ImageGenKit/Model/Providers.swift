@@ -132,6 +132,13 @@ final class ProviderStatus {
                 } else {
                     states[p.id] = .missing("Not logged in")
                 }
+            } else if p.kind == .local {
+                if !LocalModels.appleSilicon {
+                    states[p.id] = .missing("Needs a Mac with Apple silicon")
+                } else {
+                    let n = await Task.detached { LocalModels.readyCount() }.value
+                    states[p.id] = n > 0 ? .ready : .missing("No model downloaded")
+                }
             } else {
                 states[p.id] = await Keychain.exists(p.keychainService) ? .ready : .missing("No API key")
             }

@@ -9,6 +9,9 @@ struct MonthUsage {
         var images = 0
         var cost = 0.0
         var subscription = false
+        var local = false
+
+        var costLabel: String? { local ? "Free" : subscription ? "Plan" : nil }
     }
 
     struct Day: Identifiable {
@@ -55,6 +58,7 @@ struct MonthUsage {
             row.images += e.imageCount
             row.cost += c ?? 0
             row.subscription = c == nil
+            row.local = e.isLocal
             byProvider[e.provider] = row
         }
         providers = byProvider.values.sorted { ($0.images, $0.cost) > ($1.images, $1.cost) }

@@ -55,7 +55,9 @@ struct SettingsProvidersSection: View {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) { remove(p) }
         } message: { p in
-            Text(p.needsKey ? "Its API key is deleted from your Keychain." : "It won't be used for images anymore.")
+            Text(p.needsKey ? "Its API key is deleted from your Keychain."
+                 : p.kind == .local ? "It won't be used for images anymore. Downloaded models stay until you remove them."
+                 : "It won't be used for images anymore.")
         }
     }
 
@@ -141,7 +143,12 @@ struct SettingsProviderRow: View {
     private func subtitle(_ state: ProviderState) -> String {
         if status.testing.contains(provider.id) { return "Testing…" }
         switch state {
-        case .ready: return provider.kind.isSubscription ? "Subscription · Logged in" : "API key · Connected"
+        case .ready:
+            if provider.kind == .local {
+                let n = LocalModels.shared.loaded ? LocalModels.shared.readyModels.count : LocalModels.readyCount()
+                return "Free · \(n) model\(n == 1 ? "" : "s")"
+            }
+            return provider.kind.isSubscription ? "Subscription · Logged in" : "API key · Connected"
         case .missing(let why), .error(let why): return why
         case .unknown: return "Checking…"
         }
@@ -155,8 +162,12 @@ struct SettingsProviderRow: View {
             SettingsBadge(text: "Ready")
                 .help("Ready")
         } else if state != .unknown {
-            Button(provider.needsKey ? "Add Key" : (installed ? "Log In" : "Set Up")) {
-                sheet = .setup(provider.id)
+            if provider.kind == .local {
+                if LocalModels.appleSilicon { Button("Download Model") { sheet = .setup(provider.id) } }
+            } else {
+                Button(provider.needsKey ? "Add Key" : (installed ? "Log In" : "Set Up")) {
+                    sheet = .setup(provider.id)
+                }
             }
         }
     }
@@ -167,7 +178,9 @@ struct SettingsProviderRow: View {
                 Task { await status.test(provider, installer: installer) }
             }
             .disabled(!state.isReady)
-            if provider.needsKey {
+            if provider.kind == .local {
+                Button("Manage Models…", systemImage: "square.stack.3d.down.right") { sheet = .setup(provider.id) }
+            } else if provider.needsKey {
                 Button("Change Key…", systemImage: "key") { sheet = .setup(provider.id) }
             } else {
                 if let login = SetupAction.command(provider.kind == .codex ? "login-codex" : "login-grok") {

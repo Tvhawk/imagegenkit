@@ -263,3 +263,47 @@ struct StatsTests {
         })
     }
 }
+
+@MainActor
+struct LocalModelTests {
+    @Test func parsesLocalRunAsFree() throws {
+        let line = #"{"ts": "2026-11-21T22:30:00", "provider": "local", "type": "local", "model": "FLUX.2 klein 4B", "prompt": "a mug", "params": {"model_id": "flux2-klein-4b", "size": "1024x1024", "steps": 4, "seed": 42, "n": 1}, "refs": [], "outputs": ["/tmp/a.png"], "usage": null, "seconds": 48.0, "cwd": "/tmp"}"#
+        let e = try #require(LogParser().parse(line: Substring(line), id: 1))
+        #expect(e.isLocal)
+        #expect(ConfigStore(url: URL(fileURLWithPath: "/nonexistent/config.json")).cost(e) == nil)
+        #expect(e.rerunCommand == "imagegenkit local 'a mug' --size 1024x1024 -m flux2-klein-4b --extra seed=42")
+    }
+
+    @Test func readsEngineProgress() throws {
+        let step = try #require(GenerateProgress(line: "  step 3/4", images: 1))
+        #expect(step.text == "Step 3 of 4")
+        #expect(step.fraction == 0.75)
+        let second = try #require(GenerateProgress(line: "  step 2/4 (image 2 of 2)", images: 2))
+        #expect(second.text == "Image 2 of 2 · Step 2 of 4")
+        #expect(second.fraction == 0.75)
+        #expect(GenerateProgress(line: "  loading the model", images: 1)?.text == "Loading model")
+        #expect(GenerateProgress(line: "FLUX.2 klein 4B on this Mac | 1024x1024", images: 1) == nil)
+    }
+
+    @Test func tellsLinksFromSearchWords() {
+        #expect(LocalModels.isLink("https://huggingface.co/leejet/FLUX.2-klein-4B-GGUF"))
+        #expect(LocalModels.isLink("unsloth/Z-Image-GGUF"))
+        #expect(!LocalModels.isLink("klein"))
+        #expect(!LocalModels.isLink("flux klein 4b"))
+        #expect(LocalModels.size(5_293_871_164) == "5.3 GB")
+        #expect(LocalModels.size(38_331_254) == "38 MB")
+        #expect(LocalModels.count(517_982) == "518K")
+        #expect(LocalModels.message("  downloading\nimagegenkit: not enough disk space: x\n") == "Not enough disk space: x")
+    }
+
+    @Test func localProviderNeedsNoKey() {
+        let p = try! #require(ProviderInfo.builtins.first { $0.id == "local" })
+        #expect(!p.needsKey)
+        #expect(GenerateSpec.sizes(.local) == ["0.5K", "1K", "2K"])
+        let args = GenerateOptions(aspect: "16:9", size: "1K", count: 2, model: "Z-Image Turbo").arguments(for: p, references: [], mask: nil)
+        #expect(args.contains("-m") && args.contains("Z-Image Turbo"))
+        #expect(args.contains("--resolution") && args.contains("1K"))
+        #expect(!args.contains("--quality"))
+    }
+}
+

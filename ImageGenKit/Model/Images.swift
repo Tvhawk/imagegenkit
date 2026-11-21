@@ -246,4 +246,79 @@ nonisolated enum Shell {
         return Result(status: p.terminationStatus, stdout: String(decoding: o, as: UTF8.self),
                       stderr: String(decoding: errBox.data, as: UTF8.self))
     }
+
+    /// Runs a command and hands each output line to `onLine` as it arrives (stderr: `isError`). Lines end at
+    /// a newline or a carriage return. Cancelling the task terminates the command.
+    static func stream(_ executable: URL, _ arguments: [String], stdin: String? = nil,
+                       onLine: @escaping @Sendable (_ line: String, _ isError: Bool) -> Void) async -> Result {
+        let p = Process()
+        return await withTaskCancellationHandler {
+            await Task.detached(priority: .userInitiated) { streamBlocking(p, executable, arguments, stdin: stdin, onLine: onLine) }.value
+        } onCancel: {
+            if p.isRunning { p.terminate() }
+        }
+    }
+
+    private final class LineSplitter: @unchecked Sendable {
+        private var pending = Data()
+        private(set) var all = Data()
+        private let lock = NSLock()
+
+        /// Appends data and returns the complete lines in it.
+        func feed(_ data: Data) -> [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            all.append(data)
+            pending.append(data)
+            var lines: [String] = []
+            while let i = pending.firstIndex(where: { $0 == 10 || $0 == 13 }) {
+                let line = pending[pending.startIndex..<i]
+                pending = Data(pending[pending.index(after: i)...])
+                if !line.isEmpty { lines.append(String(decoding: line, as: UTF8.self)) }
+            }
+            return lines
+        }
+
+        func rest() -> String? {
+            lock.lock()
+            defer { lock.unlock() }
+            return pending.isEmpty ? nil : String(decoding: pending, as: UTF8.self)
+        }
+    }
+
+    private static func streamBlocking(_ p: Process, _ executable: URL, _ arguments: [String], stdin: String?,
+                                       onLine: @escaping @Sendable (String, Bool) -> Void) -> Result {
+        _ = ignoreSIGPIPE
+        p.executableURL = executable
+        p.arguments = arguments
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = path
+        env["PYTHONUNBUFFERED"] = "1"
+        p.environment = env
+        let out = Pipe(), err = Pipe(), input = Pipe()
+        p.standardOutput = out
+        p.standardError = err
+        p.standardInput = input
+        do { try p.run() } catch { return Result(status: -1, stdout: "", stderr: error.localizedDescription) }
+        let group = DispatchGroup(), outLines = LineSplitter(), errLines = LineSplitter()
+        let writer = input.fileHandleForWriting
+        DispatchQueue.global(qos: .userInitiated).async(group: group) {
+            if let stdin { try? writer.write(contentsOf: Data(stdin.utf8)) }
+            try? writer.close()
+        }
+        for (handle, splitter, isError) in [(out.fileHandleForReading, outLines, false), (err.fileHandleForReading, errLines, true)] {
+            DispatchQueue.global(qos: .userInitiated).async(group: group) {
+                while true {
+                    let data = handle.availableData
+                    if data.isEmpty { break }
+                    for line in splitter.feed(data) { onLine(line, isError) }
+                }
+                if let rest = splitter.rest() { onLine(rest, isError) }
+            }
+        }
+        group.wait()
+        p.waitUntilExit()
+        return Result(status: p.terminationStatus, stdout: String(decoding: outLines.all, as: UTF8.self),
+                      stderr: String(decoding: errLines.all, as: UTF8.self))
+    }
 }

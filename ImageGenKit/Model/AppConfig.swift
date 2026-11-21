@@ -20,9 +20,12 @@ enum ImageTask: String, CaseIterable, Identifiable {
 
 nonisolated enum ProviderKind: String, Sendable {
     case openai, grokBuild = "grok-build", codex = "codex-cli", xai, gemini, compatible = "openai-compatible", openrouter, together, fal
+    case local  // open models on this Mac (stable-diffusion.cpp)
 
     /// Signs in with a subscription login instead of an API key.
     var isSubscription: Bool { self == .grokBuild || self == .codex }
+    /// No API key: a subscription login, or models on this Mac.
+    var isKeyless: Bool { isSubscription || self == .local }
 }
 
 /// One provider imagegen can use: built-in or the user's own OpenAI-compatible endpoint.
@@ -37,7 +40,7 @@ struct ProviderInfo: Identifiable, Hashable {
     var builtin: Bool
     var catalogID: String?
 
-    var needsKey: Bool { !kind.isSubscription }
+    var needsKey: Bool { !kind.isKeyless }
     var keychainService: String { "imagegenkit-\(id)" }
     var canTransparent: Bool { kind == .openai }
     var color: Color { ProviderStyle.color(id) }
@@ -52,6 +55,7 @@ struct ProviderInfo: Identifiable, Hashable {
         ProviderInfo(id: "gemini", label: "Google Gemini", kind: .gemini,
                      baseURL: "https://generativelanguage.googleapis.com/v1beta",
                      keyURL: URL(string: "https://aistudio.google.com/apikey"), builtin: true),
+        ProviderInfo(id: "local", label: "On this Mac", kind: .local, builtin: true),
     ]
 }
 
@@ -67,6 +71,7 @@ enum ProviderStyle {
         case "xai": "xAI API"
         case "gemini": "Gemini"
         case "codex": "Codex"
+        case "local": "On this Mac"
         default: customLabels[id] ?? id.capitalized
         }
     }
@@ -84,7 +89,8 @@ enum ProviderStyle {
         case "gemini": 2
         case "xai": 3
         case "codex": 5
-        default: customOrder.firstIndex(of: id).map { [4, 6, 7][$0 % 3] }
+        case "local": 6
+        default: customOrder.firstIndex(of: id).map { [4, 7][$0 % 2] }
         }
         guard let index else { return .gray }
         return Color(light: slots[index].0, dark: slots[index].1)
@@ -115,7 +121,7 @@ final class ConfigStore {
         "resolution": "2K",
         "quality": "medium",
         "output_dir": "~/Pictures/ImageGenKit",
-        "order": ["grok", "codex", "openai", "xai", "gemini"],
+        "order": ["grok", "codex", "openai", "xai", "gemini", "local"],
     ]
     static let defaultTasks: [String: [String: String]] = [
         "draft": ["provider": "grok", "quality": "low", "resolution": "1K"],
@@ -410,9 +416,9 @@ final class ConfigStore {
         save()
     }
 
-    /// Estimated cost of one run in USD. nil = covered by a subscription.
+    /// Estimated cost of one run in USD. nil = not paid per image (a subscription, or made on this Mac).
     func cost(_ e: LogEntry) -> Double? {
-        if e.isSubscription { return nil }
+        if e.isSubscription || e.isLocal { return nil }
         if let reported = e.reportedCostUSD { return reported }
         if let u = e.openAIUsage, price(e.provider, model: e.model, "image_out") ?? (e.type == "openai" ? price("openai", model: e.model, "image_out") : nil) != nil {
             let pid = price(e.provider, model: e.model, "image_out") != nil ? e.provider : "openai"

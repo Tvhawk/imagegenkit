@@ -18,6 +18,10 @@ struct Stats {
         var images = 0
         var cost = 0.0
         var subscription = false
+        /// Made on this Mac (free): shown as "Free" instead of a price.
+        var local = false
+
+        var costLabel: String? { local ? "Free" : subscription ? "Plan" : nil }
     }
 
     struct Month: Identifiable {
@@ -92,6 +96,7 @@ struct Stats {
             p.images += e.imageCount
             p.cost += value
             p.subscription = c == nil
+            p.local = e.isLocal
             providerMap[e.provider] = p
 
             var g = projectMap[e.project] ?? Group(id: e.project, name: e.project)

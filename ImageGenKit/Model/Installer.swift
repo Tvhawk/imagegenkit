@@ -252,6 +252,15 @@ final class Installer {
         return await Shell.run(URL(fileURLWithPath: "/usr/bin/env"), ["python3", bundledCLI.path] + args, stdin: stdin)
     }
 
+    /// Like `runCLI`, with each output line as it arrives (progress). Cancelling the task stops the command.
+    nonisolated func streamCLI(_ args: [String], stdin: String? = nil,
+                               onLine: @escaping @Sendable (_ line: String, _ isError: Bool) -> Void) async -> Shell.Result {
+        guard let cli = Bundle.main.url(forResource: "imagegenkit", withExtension: "py") else {
+            return Shell.Result(status: -1, stdout: "", stderr: "CLI missing from the app bundle")
+        }
+        return await Shell.stream(URL(fileURLWithPath: "/usr/bin/env"), ["python3", cli.path] + args, stdin: stdin, onLine: onLine)
+    }
+
     private func fail(_ message: String) {
         lastError = message
     }

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-11-09T07:00",
+  "updated": "2026-11-21T22:00",
   "providers": [
     {
       "id": "openai",
@@ -91,6 +91,19 @@
       "tested": false
     },
     {
+      "id": "local",
+      "name": "On this Mac",
+      "adapter": "local",
+      "auth": "none",
+      "tagline": "Open models that run on your Mac. Free, private, offline.",
+      "price_hint": "Free · Apple silicon",
+      "steps": [],
+      "prices": {},
+      "models": [],
+      "transparent": false,
+      "tested": true
+    },
+    {
       "id": "xai",
       "name": "xAI API",
       "adapter": "xai",
@@ -143,7 +156,7 @@
           "text": "Create an API key and copy it."
         },
         {
-          "text": "Click \u201cSet up billing\u201d and add a payment method. Image models aren't on the free tier."
+          "text": "Click “Set up billing” and add a payment method. Image models aren't on the free tier."
         },
         {
           "text": "Paste the key below."

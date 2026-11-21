@@ -668,7 +668,7 @@ private struct OverviewBreakdown: View {
                             Text(g.images.formatted())
                                 .monospacedDigit()
                                 .frame(width: Self.imagesWidth, alignment: .trailing)
-                            Text(g.subscription ? "Plan" : Format.usd(g.cost))
+                            Text(g.costLabel ?? Format.usd(g.cost))
                                 .monospacedDigit()
                                 .foregroundStyle(.secondary)
                                 .frame(width: Self.spendWidth, alignment: .trailing)

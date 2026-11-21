@@ -14,8 +14,8 @@ settings:
     ENABLE_APP_SANDBOX: NO
     ENABLE_HARDENED_RUNTIME: YES
     GENERATE_INFOPLIST_FILE: YES
-    MARKETING_VERSION: '1.0.2'
-    CURRENT_PROJECT_VERSION: '3'
+    MARKETING_VERSION: '1.1.0'
+    CURRENT_PROJECT_VERSION: '4'
 targets:
   ImageGenKit:
     type: application
@@ -31,6 +31,8 @@ targets:
       - path: skill/SKILL.md
         buildPhase: resources
       - path: catalog/providers.json
+        buildPhase: resources
+      - path: catalog/local.json
         buildPhase: resources
     settings:
       base:

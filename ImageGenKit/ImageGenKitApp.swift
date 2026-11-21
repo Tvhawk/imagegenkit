@@ -158,6 +158,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        LocalModels.shared.cancelAll()
+    }
+
     /// With the menu bar item shown, closing the window keeps the app running there.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !MenuBarDock.showMenuBar }
 }
