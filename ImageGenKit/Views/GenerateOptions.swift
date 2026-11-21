@@ -49,7 +49,7 @@ enum GenerateSpec {
         switch kind {
         case .openai, .openrouter: ["png", "jpeg", "webp"]
         case .together, .fal: ["png", "jpeg"]
-        case .local: ["png", "jpeg", "webp"]
+        case .local: ["png", "jpeg"]
         default: []
         }
     }

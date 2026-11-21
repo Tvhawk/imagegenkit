@@ -106,7 +106,7 @@ SUBSCRIPTION_TYPES = {"grok-build", "codex-cli"}  # log in instead of an API key
 FREE_TYPES = SUBSCRIPTION_TYPES | {"local"}  # no per-image cost: never counted against limits
 KEYLESS_TYPES = SUBSCRIPTION_TYPES | {"local"}
 RESERVED = set(TASKS) | {"usage", "update", "check", "models", "set-key", "delete-key", "config", "providers", "provider", "version",
-                         "help", "log", "local-models"}
+                         "help", "log", "local-models", "detect"}
 
 MIME_BY_EXT = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
@@ -1515,15 +1515,36 @@ def match_recipe(info, cat, lookups=None):
                     lookups[b] = []
             nxt += lookups[b]
         bases = nxt
+    rid = recipe_from_name(repo, recipes)
+    if rid:
+        return rid, None
     return None, "a model family ImageGenKit can't run yet"
 
 
-# Adult and "uncensored" models are never downloaded: the EU AI Act bans AI systems that can foreseeably make intimate
-# images of real people without consent (Article 5, from 2 December 2026). catalog/local.json can extend the list.
+# Repos that don't name their base model: the family from the repo name (most specific first).
+NAME_RECIPES = [
+    (r"z[-_ ]?image[-_ ]?turbo", "z-image-turbo"), (r"z[-_ ]?image", "z-image"),
+    (r"flux[-_.]?2[-_ ]?klein[-_ ]?base[-_ ]?9b", "flux2-klein-base-9b"), (r"flux[-_.]?2[-_ ]?klein[-_ ]?9b", "flux2-klein-9b"),
+    (r"flux[-_.]?2[-_ ]?klein[-_ ]?base", "flux2-klein-base-4b"), (r"flux[-_.]?2[-_ ]?klein", "flux2-klein-4b"),
+    (r"flux[-_.]?3[-_ ]?(image[-_ ]?)?klein[-_ ]?base", "flux3-klein-base"), (r"flux[-_.]?3[-_ ]?(image[-_ ]?)?klein", "flux3-klein"),
+    (r"flux[-_.]?1[-_ ]?schnell", "flux1-schnell"), (r"flux[-_.]?1[-_ ]?dev", "flux1-dev"),
+    (r"qwen[-_ ]?image[-_ ]?edit[-_ ]?2511", "qwen-image-edit-2511"), (r"qwen[-_ ]?image[-_ ]?edit", "qwen-image-edit"),
+    (r"chroma", "chroma"), (r"sdxl[-_ ]?turbo", "sdxl-turbo"),
+]
+
+
+def recipe_from_name(name, recipes):
+    n = (name or "").lower()
+    if re.search(r"lora|text[-_ ]?encoder|(^|[-_/ ])te([-_ ]|$)|vae|controlnet", n):
+        return None
+    return next((rid for pat, rid in NAME_RECIPES if rid in recipes and re.search(pat, n)), None)
+
+
+# Adult and "uncensored" models aren't shown in search (they can still be added by link or file).
+# catalog/local.json can extend the list.
 BLOCK_TAGS = {"not-for-all-audiences", "nsfw"}
 BLOCK_WORDS = ["uncensor", "nsfw", "nude", "nudity", "naked", "undress", "porn", "hentai", "lewd", "erotic", "explicit", "xxx",
                "abliterat", "18+", "biglove", "lustify"]
-BLOCKED_MESSAGE = "ImageGenKit doesn't download uncensored or adult models"
 
 
 def local_blocked(cat, names, tags=()):
@@ -1598,8 +1619,6 @@ def resolve_local(spec, cat, recipe=None, wanted=None):
     if hf and not Path(spec).expanduser().exists() and (spec.startswith("http") or spec.count("/") == 1):
         repo, path = hf.group(1), urllib.parse.unquote(hf.group(2)) if hf.group(2) else wanted
         info = hf_get(f"/api/models/{repo}?expand[]=cardData&expand[]=tags&expand[]=gated")
-        if local_blocked(cat, [repo, path] + base_models(info)[0], info.get("tags")):
-            die(BLOCKED_MESSAGE)
         rid, why = (recipe, None) if recipe else match_recipe(info, cat)
         if not rid:
             die(f"{repo} is {why}")
@@ -1616,8 +1635,6 @@ def resolve_local(spec, cat, recipe=None, wanted=None):
     if not recipe:
         die("for a download link or a file, say which model family it is: --recipe "
             + " | ".join(r for r in cat["recipes"]))
-    if local_blocked(cat, [spec]):
-        die(BLOCKED_MESSAGE)
     p = Path(spec).expanduser()
     if p.is_file():
         return {"id": local_id(p.stem), "name": p.stem, "recipe": recipe, "file": {"local": str(p.resolve()), "size": p.stat().st_size},
@@ -1867,7 +1884,9 @@ def run_local(a, cfg, spec, task):
     seed = int(x["seed"]) if "seed" in x else random.randint(0, 2 ** 31 - 1)
     w, h = local_size(a, rec, refs)
     fmt = (a.format or "png").lower().replace("jpg", "jpeg")
-    ext = {"png": ".png", "jpeg": ".jpg", "webp": ".webp"}.get(fmt, ".png")
+    if fmt not in ("png", "jpeg"):
+        log(f"  note: {spec['label']} saves PNG or JPEG, using PNG")
+        fmt = "png"
     work = LOCAL_WORKDIR / uuid.uuid4().hex[:12]
     work.mkdir(parents=True, exist_ok=True)
     flags = {"model": "-m", "diffusion_model": "--diffusion-model", "llm": "--llm", "llm_vision": "--llm_vision",
@@ -1876,7 +1895,7 @@ def run_local(a, cfg, spec, task):
     for slot, rel in m["files"].items():
         cmd += [flags.get(slot, "--" + slot), str(local_path(rel))]
     cmd += ["-p", prompt, "-W", str(w), "-H", str(h), "--steps", str(steps), "--cfg-scale", f"{cfg_scale:g}",
-            "--sampling-method", sampler, "-s", str(seed), "-b", str(a.n), "-o", str(work / f"image-%02d{ext}")]
+            "--sampling-method", sampler, "-s", str(seed), "-b", str(a.n), "-o", str(work / "image-%02d.png")]
     if x.get("negative"):
         cmd += ["-n", str(x["negative"])]
     if x.get("flow_shift") or d.get("flow_shift"):
@@ -1946,11 +1965,223 @@ def run_local(a, cfg, spec, task):
         if code in (-9, 137) or re.search(r"out of memory|failed to allocate|insufficient memory", detail, re.I):
             die(f"{m['name']} ran out of memory. Close other apps, try a smaller size (--resolution 0.5K), or use a smaller model")
         die(f"{m['name']} couldn't make the image: {detail}")
-    images = [(p.read_bytes(), MIME_BY_EXT[p.suffix.lower()]) for p in files]
-    shutil.rmtree(work, ignore_errors=True)
+    try:  # marked as AI-made (metadata and watermark) before anything is saved
+        images = [mark_image(p, fmt, m["name"], work) for p in files]
+    except (OSError, ValueError) as e:
+        die(f"couldn't mark the image as AI-made ({e}), so it wasn't saved")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
     finish(a, cfg, spec, task, m["name"], prompt,
            {"model_id": m["id"], "size": f"{w}x{h}", "steps": steps, "cfg": cfg_scale, "sampler": sampler,
             "seed": seed, "n": a.n}, refs, images, None, t0, {"engine": local_registry().get("engine", {}).get("version")})
+
+
+# ---------- AI marking (images made on this Mac) ----------
+# EU AI Act Article 50(2): images from AI systems are marked as AI-made in a machine-readable way. Cloud providers mark
+# their own images; images made on this Mac get two marks from ImageGenKit:
+#  1. Metadata: XMP with IPTC DigitalSourceType "trainedAlgorithmicMedia" (read by Google, Meta, Adobe and others).
+#  2. An invisible watermark that survives re-saving as JPEG and resizing, which `imagegenkit detect` finds.
+# Watermark v1 (public, so anyone can check images): the picture is split into 4x4-pixel blocks; every block gets
+# +a or -a added to red, green and blue (a = 1, 2 where there is strong texture; in flat blocks only every other
+# pixel changes), following a fixed
+# +/-1 pattern of 64x64 blocks (256 px), repeated. The pattern comes from SHA-256 of "ImageGenKit watermark v1".
+# Detection correlates the green channel's block means (minus their neighbours) with the pattern at a few scales.
+# Without the mark the score behaves like a standard normal value (about 0-3); 6 or more means marked.
+
+MARK_KEY = b"ImageGenKit watermark v1"
+MARK_TILE = 64  # blocks per side of the repeating pattern
+MARK_BLOCK = 4  # pixels per block side
+MARK_THRESHOLD = 6.0
+DIGITAL_SOURCE = "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"
+
+
+def mark_pattern():
+    """MARK_TILE x MARK_TILE signs (+1/-1) from the public key."""
+    bits, counter = [], 0
+    while len(bits) < MARK_TILE * MARK_TILE:
+        for byte in hashlib.sha256(MARK_KEY + counter.to_bytes(4, "big")).digest():
+            bits.extend((byte >> i) & 1 for i in range(8))
+        counter += 1
+    return [[1 if bits[r * MARK_TILE + c] else -1 for c in range(MARK_TILE)] for r in range(MARK_TILE)]
+
+
+def read_bmp(path):
+    """(width, height, rows) with rows as top-down BGR bytes, from a 24- or 32-bit BMP (as written by sips)."""
+    d = Path(path).read_bytes()
+    off = int.from_bytes(d[10:14], "little")
+    w = int.from_bytes(d[18:22], "little", signed=True)
+    h = int.from_bytes(d[22:26], "little", signed=True)
+    bpp = int.from_bytes(d[28:30], "little")
+    if bpp not in (24, 32) or int.from_bytes(d[30:34], "little") not in (0, 3):
+        raise ValueError(f"unsupported BMP ({bpp} bit)")
+    step = bpp // 8
+    stride = (w * step + 3) // 4 * 4
+    rows = []
+    for i in range(abs(h)):
+        r = d[off + i * stride: off + i * stride + w * step]
+        if step == 4:  # BGRA -> BGR
+            out = bytearray(w * 3)
+            out[0::3], out[1::3], out[2::3] = r[0::4], r[1::4], r[2::4]
+            r = bytes(out)
+        rows.append(r)
+    if h > 0:
+        rows.reverse()  # bottom-up
+    return w, abs(h), rows
+
+
+def write_bmp(path, w, rows):
+    stride = (w * 3 + 3) // 4 * 4
+    pad = b"\0" * (stride - w * 3)
+    h = len(rows)
+    header = b"BM" + (54 + stride * h).to_bytes(4, "little") + b"\0\0\0\0" + (54).to_bytes(4, "little")
+    dib = (40).to_bytes(4, "little") + w.to_bytes(4, "little") + (-h).to_bytes(4, "little", signed=True) + \
+        (1).to_bytes(2, "little") + (24).to_bytes(2, "little") + b"\0" * 24
+    Path(path).write_bytes(header + dib + b"".join(r + pad for r in rows))
+
+
+def image_rows(path, work):
+    """Decode any image macOS can read to (width, height, BGR rows) through sips."""
+    bmp = Path(work) / f"{uuid.uuid4().hex[:8]}.bmp"
+    r = subprocess.run(["sips", "-s", "format", "bmp", str(path), "--out", str(bmp)], capture_output=True, text=True)
+    if r.returncode != 0 or not bmp.exists():
+        raise ValueError(f"can't read {Path(path).name}")
+    try:
+        return read_bmp(bmp)
+    finally:
+        bmp.unlink()
+
+
+def embed_watermark(w, h, rows):
+    """Adds the watermark to BGR rows (returns new rows)."""
+    pat, b = mark_pattern(), MARK_BLOCK
+    small = w * h < 700_000  # fewer blocks to detect from: a little stronger
+    plus = [bytes(min(255, v + a) for v in range(256)) for a in range(4)]
+    minus = [bytes(max(0, v - a) for v in range(256)) for a in range(4)]
+    out = []
+    for y0 in range(0, h, b):
+        band = rows[y0:y0 + b]
+        prow = pat[(y0 // b) % MARK_TILE]
+        new = [bytearray(r) for r in band]
+        for x0 in range(0, w, b):
+            s, e = x0 * 3, min(w, x0 + b) * 3
+            g = [v for r in band for v in r[s + 1:e:3]]
+            spread = max(g) - min(g)
+            amp = (1 if spread <= 24 else 2) + (1 if small and spread > 3 else 0)
+            table = plus[amp] if prow[(x0 // b) % MARK_TILE] > 0 else minus[amp]
+            for i, r in enumerate(band):
+                if spread <= 3 and not small:  # flat: every other pixel, so smooth areas show no grain
+                    for px in range(s + ((y0 + i + x0) % 2) * 3, e, 6):
+                        new[i][px:px + 3] = r[px:px + 3].translate(table)
+                else:
+                    new[i][s:e] = r[s:e].translate(table)
+        out.extend(bytes(r) for r in new)
+    return out
+
+
+def watermark_score(w, h, rows):
+    """Detection score (about 0 for unmarked images, 7+ for marked), the best over a few resize scales."""
+    pat = mark_pattern()
+    greens = [r[1::3] for r in rows]
+    best = 0.0
+    for scale in (1.0, 0.5, 0.75, 2 / 3, 1.5, 2.0, 1.25, 0.8):
+        size = MARK_BLOCK * scale
+        nx, ny = int(w // size), int(h // size)
+        if nx < 8 or ny < 8:
+            continue
+        xs = [(int(round(i * size)), int(round((i + 1) * size))) for i in range(nx)]
+        means = []
+        for j in range(ny):
+            y0, y1 = int(round(j * size)), int(round((j + 1) * size))
+            band = greens[y0:y1]
+            row = []
+            for x0, x1 in xs:
+                row.append(sum(sum(g[x0:x1]) for g in band) / ((x1 - x0) * (y1 - y0)))
+            means.append(row)
+        num = den = 0.0
+        for j in range(1, ny - 1):
+            prow, up, mid, down = pat[j % MARK_TILE], means[j - 1], means[j], means[j + 1]
+            for i in range(1, nx - 1):
+                hp = mid[i] - (mid[i - 1] + mid[i + 1] + up[i] + down[i]) / 4
+                num += hp * prow[i % MARK_TILE]
+                den += hp * hp
+        if den > 0:
+            best = max(best, num / math.sqrt(den))
+    return best
+
+
+def xmp_packet(model):
+    tool = f"ImageGenKit {VERSION} ({model}, on this Mac)"
+    esc = lambda t: t.replace("&", "&amp;").replace("<", "&lt;").replace('"', "&quot;")
+    return ('<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>'
+            '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+            '<rdf:Description rdf:about="" xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/" '
+            'xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/" '
+            f'Iptc4xmpExt:DigitalSourceType="{DIGITAL_SOURCE}" xmp:CreatorTool="{esc(tool)}">'
+            f'<dc:description><rdf:Alt><rdf:li xml:lang="x-default">{esc("Made with AI: " + tool)}</rdf:li></rdf:Alt>'
+            '</dc:description></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>').encode("utf-8")
+
+
+def png_bytes(w, rows, xmp):
+    """An 8-bit RGB PNG from BGR rows, with the XMP packet in an iTXt chunk."""
+    import zlib
+
+    def chunk(kind, data):
+        return len(data).to_bytes(4, "big") + kind + data + zlib.crc32(kind + data).to_bytes(4, "big")
+    raw = bytearray()
+    for r in rows:
+        rgb = bytearray(len(r))
+        rgb[0::3], rgb[1::3], rgb[2::3] = r[2::3], r[1::3], r[0::3]
+        raw += b"\0" + rgb
+    ihdr = w.to_bytes(4, "big") + len(rows).to_bytes(4, "big") + bytes([8, 2, 0, 0, 0])
+    itxt = b"XML:com.adobe.xmp\0\0\0\0\0" + xmp
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"iTXt", itxt)
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 6)) + chunk(b"IEND", b""))
+
+
+def jpeg_with_xmp(data, xmp):
+    """Inserts the XMP packet as an APP1 segment right after the JPEG's start marker."""
+    payload = b"http://ns.adobe.com/xap/1.0/\0" + xmp
+    return data[:2] + b"\xff\xe1" + (len(payload) + 2).to_bytes(2, "big") + payload + data[2:]
+
+
+def mark_image(path, fmt, model, work):
+    """(bytes, mime) of a generated image with the watermark and the AI metadata."""
+    w, h, rows = image_rows(path, work)
+    rows = embed_watermark(w, h, rows)
+    xmp = xmp_packet(model)
+    if fmt == "jpeg":
+        bmp, jpg = Path(work) / "marked.bmp", Path(work) / "marked.jpg"
+        write_bmp(bmp, w, rows)
+        r = subprocess.run(["sips", "-s", "format", "jpeg", "-s", "formatOptions", "92", str(bmp), "--out", str(jpg)],
+                           capture_output=True)
+        if r.returncode != 0:
+            raise ValueError("couldn't save the JPEG")
+        return jpeg_with_xmp(jpg.read_bytes(), xmp), "image/jpeg"
+    return png_bytes(w, rows, xmp), "image/png"
+
+
+def cmd_detect(a, cfg):
+    """Checks images for the ImageGenKit watermark and AI metadata."""
+    LOCAL_WORKDIR.mkdir(parents=True, exist_ok=True)
+    results = []
+    for p in a.images:
+        path = Path(p).expanduser()
+        if not path.is_file():
+            die(f"no such file: {p}")
+        try:
+            w, h, rows = image_rows(path, LOCAL_WORKDIR)
+        except ValueError as e:
+            die(str(e))
+        score = watermark_score(w, h, rows)
+        raw = path.read_bytes()
+        meta = b"trainedAlgorithmicMedia" in raw or b"compositeWithTrainedAlgorithmicMedia" in raw
+        results.append({"file": str(path), "watermark": score >= MARK_THRESHOLD, "score": round(score, 1), "ai_metadata": meta})
+    if a.json:
+        print(json.dumps(results, indent=1))
+        return
+    for r in results:
+        found = "ImageGenKit watermark found" if r["watermark"] else "no ImageGenKit watermark"
+        print(f"{r['file']}: {found} (score {r['score']}), AI metadata {'yes' if r['ai_metadata'] else 'no'}")
 
 
 RUNNERS = {"openai": run_openai, "openai-compatible": run_openai, "xai": run_xai, "gemini": run_gemini,
@@ -2472,6 +2703,10 @@ def main():
     q.add_argument("model")
     q.add_argument("--json", action="store_true")
     q.set_defaults(fn=cmd_local_remove)
+    p = sub.add_parser("detect", help="check images for the AI watermark and metadata of images made on this Mac")
+    p.add_argument("images", nargs="+")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_detect)
     p = sub.add_parser("models", help="image models a provider's key can use (openai, xai, custom)")
     p.add_argument("provider", nargs="?")
     p.set_defaults(fn=cmd_models)

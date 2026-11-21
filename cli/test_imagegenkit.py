@@ -194,7 +194,7 @@ class LocalModelTests(unittest.TestCase):
             igk.hf_get = real
         self.assertIsNone(igk.match_recipe({"id": "x/y", "tags": []}, cat)[0])
 
-    def test_adult_models_are_refused(self):
+    def test_adult_models_are_hidden_in_search_only(self):
         cat = self.cat
         self.assertTrue(igk.local_blocked(cat, ["someone/Qwen-Image-Edit-Uncensored-GGUF"]))
         self.assertTrue(igk.local_blocked(cat, ["a/b"], ["gguf", "not-for-all-audiences"]))
@@ -202,19 +202,56 @@ class LocalModelTests(unittest.TestCase):
         self.assertFalse(igk.local_blocked(cat, ["leejet/FLUX.2-klein-4B-GGUF"], ["gguf", "text-to-image"]))
         self.assertTrue(igk.local_blocked(dict(cat, block={"repos": ["bad/repo"]}), ["bad/repo"]))
         real = igk.hf_get
-        igk.hf_get = lambda path: {"id": "me/x-GGUF", "tags": ["not-for-all-audiences"], "cardData": {}}
+
+        def fake(path):  # a tagged adult repo with no base_model: allowed as a link, family from its name
+            if "/tree/" in path:
+                return [{"type": "file", "path": "z-image-turbo-nsfw-Q4_K.gguf", "size": 4, "lfs": {"oid": "c" * 64}}]
+            return {"id": "me/z-image-turbo-nsfw-GGUF", "tags": ["not-for-all-audiences"], "cardData": {}}
+        igk.hf_get = fake
         try:
-            with self.assertRaises(SystemExit):
-                igk.resolve_local("me/x-GGUF", cat)
+            self.assertEqual(igk.resolve_local("me/z-image-turbo-nsfw-GGUF", cat)["recipe"], "z-image-turbo")
         finally:
             igk.hf_get = real
-        with self.assertRaises(SystemExit):
-            igk.resolve_local("https://example.com/nude-model.gguf", cat, recipe="sdxl")
+        self.assertEqual(igk.resolve_local("https://example.com/nude-model.gguf", cat, recipe="sdxl")["recipe"], "sdxl")
+        self.assertEqual(igk.recipe_from_name("lesliemore/z-image-turbo-nsfw-v2-GGUF", cat["recipes"]), "z-image-turbo")
+        self.assertEqual(igk.recipe_from_name("x/FLUX.2-klein-9B-True-V2", cat["recipes"]), "flux2-klein-9b")
+        self.assertIsNone(igk.recipe_from_name("ponpoke/flux2-klein-4b-uncensored-text-encoder", cat["recipes"]))
+        self.assertIsNone(igk.recipe_from_name("a/some-other-model", cat["recipes"]))
         self.assertEqual(igk.license_of({"license": "other", "license_name": "flux-non-commercial-license"}),
                          ("flux-non-commercial-license", True))
         self.assertEqual(igk.license_of({"license": "apache-2.0"}), ("apache-2.0", False))
         self.assertEqual(igk.license_of({"license": "cc-by-nc-4.0"}), ("cc-by-nc-4.0", True))
         self.assertEqual(igk.license_of({"license": "other"}), (None, False))
+
+    def test_watermark_survives_jpeg_and_resizing(self):
+        import random
+        rnd = random.Random(7)
+        w = h = 512
+        rows = []  # a smooth gradient with a little noise, like a photo background
+        for y in range(h):
+            r = bytearray()
+            for x in range(w):
+                base = 60 + (x + y) * 120 // (w + h)
+                r += bytes(max(0, min(255, base + rnd.randint(-2, 2) + k * 20)) for k in range(3))
+            rows.append(bytes(r))
+        work = Path(HOME) / "wm"
+        work.mkdir(exist_ok=True)
+        self.assertLess(igk.watermark_score(w, h, rows), igk.MARK_THRESHOLD)
+        src = work / "plain.bmp"
+        igk.write_bmp(src, w, rows)
+        png, mime = igk.mark_image(src, "png", "Test", work)
+        self.assertEqual(mime, "image/png")
+        self.assertIn(igk.DIGITAL_SOURCE.encode(), png)
+        marked = work / "marked.png"
+        marked.write_bytes(png)
+        self.assertGreater(igk.watermark_score(*igk.image_rows(marked, work)), igk.MARK_THRESHOLD)
+        jpg, mime = igk.mark_image(src, "jpeg", "Test", work)
+        self.assertTrue(jpg.startswith(b"\xff\xd8\xff\xe1") and igk.DIGITAL_SOURCE.encode() in jpg)
+        import subprocess
+        small = work / "small.jpg"
+        subprocess.run(["sips", "-Z", "256", "-s", "format", "jpeg", "-s", "formatOptions", "75", str(marked), "--out", str(small)],
+                       capture_output=True, check=True)
+        self.assertGreater(igk.watermark_score(*igk.image_rows(small, work)), igk.MARK_THRESHOLD)
 
     def test_sizes_follow_the_family_grid(self):
         rec = {"multiple": 16, "defaults": {"width": 1024, "height": 1024}}
@@ -302,7 +339,8 @@ class LocalModelTests(unittest.TestCase):
             spec = igk.all_providers(igk.load_config())["local"]
             out = Path(HOME) / "local-out.png"
             err = stderr_capture(lambda: igk.run_local(args(aspect="16:9", resolution="1K", out=str(out)), igk.load_config(), spec, None))
-            self.assertEqual(out.read_bytes(), PNG)
+            data = out.read_bytes()
+            self.assertTrue(data.startswith(b"\x89PNG") and b"trainedAlgorithmicMedia" in data)  # marked as AI-made
             self.assertIn("step 4/4", err)
             self.assertIn("loading the model", err)
             entry = json.loads(igk.LOG_FILE.read_text().splitlines()[-1])
