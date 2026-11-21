@@ -38,6 +38,8 @@ final class LocalModels {
         let name: String
         let downloads: Int
         let license: String?
+        /// The license forbids commercial use (shown as a label).
+        let noncommercial: Bool
         let gated: Bool
         let family: String?
         let edit: Bool
@@ -197,7 +199,8 @@ final class LocalModels {
         }
         results = rows.map { m in
             SearchResult(repo: m["repo"] as? String ?? "", author: m["author"] as? String ?? "", name: m["name"] as? String ?? "",
-                         downloads: m["downloads"] as? Int ?? 0, license: m["license"] as? String, gated: m["gated"] as? Bool ?? false,
+                         downloads: m["downloads"] as? Int ?? 0, license: m["license"] as? String,
+                         noncommercial: m["noncommercial"] as? Bool ?? false, gated: m["gated"] as? Bool ?? false,
                          family: m["family"] as? String, edit: m["edit"] as? Bool ?? false,
                          size: (m["size"] as? NSNumber)?.int64Value, extra: (m["extra"] as? NSNumber)?.int64Value,
                          supported: m["supported"] as? Bool ?? false, reason: m["reason"] as? String,

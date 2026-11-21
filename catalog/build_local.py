@@ -113,6 +113,16 @@ RECIPES = {
             "defaults": {"steps": 20, "cfg": 7.5, "sampler": "euler_a", "width": 512, "height": 512}},
 }
 
+# Models ImageGenKit won't download (search hides them, links and files are refused): adult and "uncensored" models.
+# The EU AI Act bans AI systems that can foreseeably make intimate images of real people without consent
+# (Article 5, from 2 December 2026). Matched against the repo or file name, its base models and its Hugging Face tags.
+BLOCK = {
+    "tags": ["not-for-all-audiences", "nsfw"],
+    "words": ["uncensor", "nsfw", "nude", "nudity", "naked", "undress", "porn", "hentai", "lewd", "erotic", "explicit",
+              "xxx", "abliterat", "18+", "biglove", "lustify"],
+    "repos": [],
+}
+
 MODELS = [
     {"id": "flux2-klein-4b", "name": "FLUX.2 klein 4B", "recipe": "flux2-klein-4b",
      "note": "Fast. Makes and edits images.", "license": "Apache 2.0", "ram": 16,
@@ -128,13 +138,24 @@ MODELS = [
      "file": f("unsloth/Qwen-Image-Edit-2511-GGUF", "qwen-image-edit-2511-Q3_K_M.gguf")},
 ]
 
+def base_license(repo):
+    url = f"https://huggingface.co/api/models/{repo}?expand[]=cardData"
+    card = json.load(urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "imagegenkit"}))).get("cardData") or {}
+    lic = card.get("license")
+    return card.get("license_name") if lic == "other" else lic
+
+
+# The original model's license: copies and fine-tunes can't loosen it, so search shows it when theirs is missing.
+for r in RECIPES.values():
+    r["license"] = base_license(r["base"][0])
+
 for m in MODELS:
     r = RECIPES[m["recipe"]]
     m["edit"] = r["edit"]
     m["download"] = m["file"]["size"] + sum(COMPONENTS[c]["size"] for c in r["slots"].values())
 
 catalog = {"version": 1, "updated": dt.datetime.now().isoformat(timespec="minutes"), "engine": ENGINE, "components": COMPONENTS,
-           "recipes": RECIPES, "models": MODELS}
+           "recipes": RECIPES, "models": MODELS, "block": BLOCK}
 with open(OUT, "w") as fh:
     json.dump(catalog, fh, indent=1)
     fh.write("\n")

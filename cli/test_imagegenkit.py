@@ -194,6 +194,28 @@ class LocalModelTests(unittest.TestCase):
             igk.hf_get = real
         self.assertIsNone(igk.match_recipe({"id": "x/y", "tags": []}, cat)[0])
 
+    def test_adult_models_are_refused(self):
+        cat = self.cat
+        self.assertTrue(igk.local_blocked(cat, ["someone/Qwen-Image-Edit-Uncensored-GGUF"]))
+        self.assertTrue(igk.local_blocked(cat, ["a/b"], ["gguf", "not-for-all-audiences"]))
+        self.assertTrue(igk.local_blocked(cat, ["a/fine-tune", "x/z-image-turbo-nsfw-v2"]))  # through its base model
+        self.assertFalse(igk.local_blocked(cat, ["leejet/FLUX.2-klein-4B-GGUF"], ["gguf", "text-to-image"]))
+        self.assertTrue(igk.local_blocked(dict(cat, block={"repos": ["bad/repo"]}), ["bad/repo"]))
+        real = igk.hf_get
+        igk.hf_get = lambda path: {"id": "me/x-GGUF", "tags": ["not-for-all-audiences"], "cardData": {}}
+        try:
+            with self.assertRaises(SystemExit):
+                igk.resolve_local("me/x-GGUF", cat)
+        finally:
+            igk.hf_get = real
+        with self.assertRaises(SystemExit):
+            igk.resolve_local("https://example.com/nude-model.gguf", cat, recipe="sdxl")
+        self.assertEqual(igk.license_of({"license": "other", "license_name": "flux-non-commercial-license"}),
+                         ("flux-non-commercial-license", True))
+        self.assertEqual(igk.license_of({"license": "apache-2.0"}), ("apache-2.0", False))
+        self.assertEqual(igk.license_of({"license": "cc-by-nc-4.0"}), ("cc-by-nc-4.0", True))
+        self.assertEqual(igk.license_of({"license": "other"}), (None, False))
+
     def test_sizes_follow_the_family_grid(self):
         rec = {"multiple": 16, "defaults": {"width": 1024, "height": 1024}}
         self.assertEqual(igk.local_size(args(aspect="16:9", resolution="1K"), rec, []), (1360, 768))

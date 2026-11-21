@@ -171,6 +171,9 @@ struct LocalModelsPage: View {
                     HStack(spacing: 6) {
                         Text(r.name).font(.callout.weight(.medium)).lineLimit(1)
                         if r.edit { Pill(text: "Edits") }
+                        if r.noncommercial {
+                            Pill(text: "Non-commercial").help("Its license (\(r.license ?? "custom")) doesn't allow commercial use")
+                        }
                     }
                     Text(details(r)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }

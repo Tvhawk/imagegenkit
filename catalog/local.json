@@ -1,6 +1,6 @@
 {
  "version": 1,
- "updated": "2026-11-21T22:35",
+ "updated": "2026-11-21T23:33",
  "engine": {
   "name": "stable-diffusion.cpp",
   "version": "master-1106-532d2c1",
@@ -97,7 +97,8 @@
     "sampler": "euler",
     "width": 1024,
     "height": 1024
-   }
+   },
+   "license": "apache-2.0"
   },
   "flux2-klein-base-4b": {
    "name": "FLUX.2 klein base 4B",
@@ -116,7 +117,8 @@
     "sampler": "euler",
     "width": 1024,
     "height": 1024
-   }
+   },
+   "license": "apache-2.0"
   },
   "flux2-klein-9b": {
    "name": "FLUX.2 klein 9B",
@@ -135,7 +137,8 @@
     "sampler": "euler",
     "width": 1024,
     "height": 1024
-   }
+   },
+   "license": "flux-non-commercial-license"
   },
   "flux2-klein-base-9b": {
    "name": "FLUX.2 klein base 9B",
@@ -154,7 +157,8 @@
     "sampler": "euler",
     "width": 1024,
     "height": 1024
-   }
+   },
+   "license": "flux-non-commercial-license"
   },
   "flux3-klein": {
    "name": "FLUX.3 klein",
@@ -173,7 +177,8 @@
     "sampler": "euler",
     "width": 1024,
     "height": 1024
-   }
+   },
+   "license": "flux-kommunity-license"
   },
   "flux3-klein-base": {
    "name": "FLUX.3 klein base",
@@ -192,7 +197,8 @@
     "sampler": "euler",
     "width": 1024,
     "height": 1024
-   }
+   },
+   "license": "flux-kommunity-license"
   },
   "z-image-turbo": {
    "name": "Z-Image Turbo",
@@ -211,7 +217,8 @@
     "sampler": "euler",
     "width": 1024,
     "height": 1024
-   }
+   },
+   "license": "apache-2.0"
   },
   "z-image": {
    "name": "Z-Image",
@@ -230,7 +237,8 @@
     "sampler": "euler",
     "width": 1024,
     "height": 1024
-   }
+   },
+   "license": "apache-2.0"
   },
   "flux1-schnell": {
    "name": "FLUX.1 schnell",
@@ -250,7 +258,8 @@
     "sampler": "euler",
     "width": 1024,
     "height": 1024
-   }
+   },
+   "license": "apache-2.0"
   },
   "flux1-dev": {
    "name": "FLUX.1 dev",
@@ -271,7 +280,8 @@
     "sampler": "euler",
     "width": 1024,
     "height": 1024
-   }
+   },
+   "license": "flux-1-dev-non-commercial-license"
   },
   "chroma": {
    "name": "Chroma",
@@ -291,7 +301,8 @@
     "sampler": "euler",
     "width": 1024,
     "height": 1024
-   }
+   },
+   "license": "apache-2.0"
   },
   "qwen-image": {
    "name": "Qwen-Image",
@@ -312,7 +323,8 @@
     "sampler": "euler",
     "width": 1024,
     "height": 1024
-   }
+   },
+   "license": "apache-2.0"
   },
   "qwen-image-edit": {
    "name": "Qwen-Image Edit",
@@ -334,7 +346,8 @@
     "sampler": "euler",
     "width": 1024,
     "height": 1024
-   }
+   },
+   "license": "apache-2.0"
   },
   "qwen-image-edit-2511": {
    "name": "Qwen-Image Edit 2511",
@@ -356,7 +369,8 @@
     "sampler": "euler",
     "width": 1024,
     "height": 1024
-   }
+   },
+   "license": "apache-2.0"
   },
   "sdxl": {
    "name": "Stable Diffusion XL",
@@ -373,7 +387,8 @@
     "sampler": "euler_a",
     "width": 1024,
     "height": 1024
-   }
+   },
+   "license": "openrail++"
   },
   "sdxl-turbo": {
    "name": "SDXL Turbo",
@@ -390,7 +405,8 @@
     "sampler": "euler_a",
     "width": 512,
     "height": 512
-   }
+   },
+   "license": "sai-nc-community"
   },
   "sd1": {
    "name": "Stable Diffusion 1.5",
@@ -409,7 +425,8 @@
     "sampler": "euler_a",
     "width": 512,
     "height": 512
-   }
+   },
+   "license": "creativeml-openrail-m"
   }
  },
  "models": [
@@ -477,5 +494,30 @@
    "edit": true,
    "download": 15710803942
   }
- ]
+ ],
+ "block": {
+  "tags": [
+   "not-for-all-audiences",
+   "nsfw"
+  ],
+  "words": [
+   "uncensor",
+   "nsfw",
+   "nude",
+   "nudity",
+   "naked",
+   "undress",
+   "porn",
+   "hentai",
+   "lewd",
+   "erotic",
+   "explicit",
+   "xxx",
+   "abliterat",
+   "18+",
+   "biglove",
+   "lustify"
+  ],
+  "repos": []
+ }
 }

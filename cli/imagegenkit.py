@@ -1518,6 +1518,35 @@ def match_recipe(info, cat, lookups=None):
     return None, "a model family ImageGenKit can't run yet"
 
 
+# Adult and "uncensored" models are never downloaded: the EU AI Act bans AI systems that can foreseeably make intimate
+# images of real people without consent (Article 5, from 2 December 2026). catalog/local.json can extend the list.
+BLOCK_TAGS = {"not-for-all-audiences", "nsfw"}
+BLOCK_WORDS = ["uncensor", "nsfw", "nude", "nudity", "naked", "undress", "porn", "hentai", "lewd", "erotic", "explicit", "xxx",
+               "abliterat", "18+", "biglove", "lustify"]
+BLOCKED_MESSAGE = "ImageGenKit doesn't download uncensored or adult models"
+
+
+def local_blocked(cat, names, tags=()):
+    """Whether a model is adult or uncensored, by its repo or file name, its base models or its Hugging Face tags."""
+    rules = cat.get("block") or {}
+    words = set(BLOCK_WORDS) | {w.lower() for w in rules.get("words", [])}
+    block_tags = BLOCK_TAGS | {t.lower() for t in rules.get("tags", [])}
+    repos = {r.lower() for r in rules.get("repos", [])}
+    text = " ".join(n for n in names if n).lower()
+    return (any(w in text for w in words) or any(t.lower() in block_tags for t in tags or [])
+            or any((n or "").lower() in repos for n in names))
+
+
+def license_of(card):
+    """A model's license, with the name of a custom one ("other"), and whether it forbids commercial use."""
+    lic = card.get("license")
+    lic = lic if isinstance(lic, str) else None
+    if lic == "other" and isinstance(card.get("license_name"), str):
+        lic = card["license_name"]
+    nc = bool(lic and re.search(r"non-?commercial|research|-nc(-|$)|noncommercial", lic, re.I))
+    return (None if lic == "other" else lic), nc
+
+
 def quant_rank(name):
     n = name.lower()
     for i, q in enumerate(QUANT_ORDER):
@@ -1569,6 +1598,8 @@ def resolve_local(spec, cat, recipe=None, wanted=None):
     if hf and not Path(spec).expanduser().exists() and (spec.startswith("http") or spec.count("/") == 1):
         repo, path = hf.group(1), urllib.parse.unquote(hf.group(2)) if hf.group(2) else wanted
         info = hf_get(f"/api/models/{repo}?expand[]=cardData&expand[]=tags&expand[]=gated")
+        if local_blocked(cat, [repo, path] + base_models(info)[0], info.get("tags")):
+            die(BLOCKED_MESSAGE)
         rid, why = (recipe, None) if recipe else match_recipe(info, cat)
         if not rid:
             die(f"{repo} is {why}")
@@ -1577,14 +1608,16 @@ def resolve_local(spec, cat, recipe=None, wanted=None):
         q = quant_label(Path(f["path"]).name)
         author, base = repo.split("/")[0], re.sub(r"(?i)[-_ ]?gguf$", "", repo.split("/")[-1])
         name = f"{base} ({author}{' ' + q if q else ''})"
-        license_ = (info.get("cardData") or {}).get("license")
+        license_, _ = license_of(info.get("cardData") or {})
         return {"id": local_id(f"{author}-{base}-{q or Path(f['path']).stem}"), "name": name, "recipe": rid,
                 "file": {"repo": repo, "path": f["path"], "size": f.get("size"), "sha256": (f.get("lfs") or {}).get("oid")},
-                "license": license_ if isinstance(license_, str) else None, "source": f"{HF_BASE}/{repo}",
+                "license": license_, "source": f"{HF_BASE}/{repo}",
                 "gated": bool(info.get("gated"))}
     if not recipe:
         die("for a download link or a file, say which model family it is: --recipe "
             + " | ".join(r for r in cat["recipes"]))
+    if local_blocked(cat, [spec]):
+        die(BLOCKED_MESSAGE)
     p = Path(spec).expanduser()
     if p.is_file():
         return {"id": local_id(p.stem), "name": p.stem, "recipe": recipe, "file": {"local": str(p.resolve()), "size": p.stat().st_size},
@@ -1643,15 +1676,19 @@ def cmd_local_search(a, cfg):
     installed = {(m.get("file") or {}).get("repo") for m in local_registry()["models"]}
     have = {Path(f).as_posix() for m in local_registry()["models"] for f in (m.get("files") or {}).values()}
     lookups, rows = {}, []
-    for m in sorted(found.values(), key=lambda m: -(m.get("downloads") or 0))[: a.limit]:
+    allowed = [m for m in found.values() if not local_blocked(cat, [m["id"]] + base_models(m)[0], m.get("tags"))]
+    for m in sorted(allowed, key=lambda m: -(m.get("downloads") or 0))[: a.limit]:
         rid, why = match_recipe(m, cat, lookups)
         rec = cat["recipes"].get(rid) or {}
         extra = sum(c["size"] for c in (cat["components"][cid] for cid in rec.get("slots", {}).values())
                     if f"{c['repo']}/{c['path']}" not in have)
-        license_ = (m.get("cardData") or {}).get("license")
+        license_, noncommercial = license_of(m.get("cardData") or {})
+        base_license, base_nc = license_of({"license": rec.get("license")})
+        if base_nc or not license_:  # a copy or fine-tune can't loosen the original model's license
+            license_, noncommercial = base_license or license_, base_nc or noncommercial
         rows.append({"repo": m["id"], "author": m["id"].split("/")[0], "name": m["id"].split("/")[-1],
                      "downloads": m.get("downloads") or 0, "likes": m.get("likes") or 0,
-                     "license": license_ if isinstance(license_, str) and license_ != "other" else None,
+                     "license": license_, "noncommercial": noncommercial,
                      "gated": bool(m.get("gated")), "recipe": rid, "family": rec.get("name"), "edit": bool(rec.get("edit")),
                      "file": None, "quant": None, "size": None, "extra": extra if rid else None,
                      "supported": bool(rid), "reason": why, "installed": m["id"] in installed})
