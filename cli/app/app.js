@@ -301,7 +301,7 @@ function openDetail(id, i) {
     <div class="modal-head"><div class="ico">${icon.image}</div><div><h2>${esc(provLabel(e.provider))}</h2><div class="muted small">${new Date(e.ts).toLocaleString()} · ${esc(e.model || "")}</div></div>
       <button class="btn icon x" data-close>${icon.x}</button></div>
     <div class="modal-body"><div class="detail">
-      <div class="big">${shown ? `<img src="${fileUrl(shown)}" class="${e.params?.background === "transparent" ? "checker" : ""}" alt="">` : '<div class="empty">The file was deleted.</div>'}
+      <div class="big">${shown ? `<div class="zoom ${e.params?.background === "transparent" ? "checker" : ""}" title="Scroll to zoom, drag to move, double-click to reset"><img src="${fileUrl(shown)}" alt="" draggable="false"><span class="zoom-pct"></span></div>` : '<div class="empty">The file was deleted.</div>'}
         <div class="row">${exists && out ? `<button class="btn small" data-a="open">${icon.open}Open</button><button class="btn small" data-a="reveal">${icon.folder}Show in folder</button>` : ""}
           <button class="btn small" data-a="copy">${icon.copy}Copy prompt</button>${exists && out ? `<button class="btn small" data-a="ref">${icon.ref}Use as reference</button>` : ""}</div>
         ${(e.outputs || []).length > 1 ? `<div class="row">${e.outputs.map((_, j) => `<button class="btn small ${j === i ? "primary" : ""}" data-j="${j}">${j + 1}</button>`).join("")}</div>` : ""}
@@ -333,6 +333,60 @@ function openDetail(id, i) {
   };
   $$("[data-a]", m.el).forEach((b) => b.onclick = () => act(b.dataset.a));
   $$("[data-j]", m.el).forEach((b) => b.onclick = () => { m.close(); openDetail(id, +b.dataset.j); });
+  const z = $(".zoom", m.el);
+  if (z) zoomable(z);
+}
+
+// Scroll-wheel zoom toward the cursor, drag to pan, double-click to toggle.
+function zoomable(frame) {
+  const img = $("img", frame), pct = $(".zoom-pct", frame);
+  const MAX = 10;
+  let s = 1, tx = 0, ty = 0, hideT;
+  const clamp = () => {
+    const w = frame.clientWidth, hgt = frame.clientHeight;
+    tx = Math.min(0, Math.max(w - w * s, tx));
+    ty = Math.min(0, Math.max(hgt - hgt * s, ty));
+  };
+  const apply = (anim) => {
+    clamp();
+    img.style.transition = anim ? "transform .18s ease" : "none";
+    img.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`;
+    frame.classList.toggle("zoomed", s > 1);
+    pct.textContent = Math.round(s * 100) + "%";
+    pct.classList.add("show");
+    clearTimeout(hideT);
+    if (s === 1) hideT = setTimeout(() => pct.classList.remove("show"), 700);
+  };
+  const zoomAt = (ns, cx, cy, anim) => {
+    ns = Math.min(MAX, Math.max(1, ns));
+    const r = frame.getBoundingClientRect(), px = cx - r.left, py = cy - r.top;
+    tx = px - (px - tx) * (ns / s);  // keep the point under the cursor fixed
+    ty = py - (py - ty) * (ns / s);
+    s = ns;
+    if (s === 1) tx = ty = 0;
+    apply(anim);
+  };
+  frame.addEventListener("wheel", (ev) => {
+    ev.preventDefault();
+    const d = ev.deltaMode === 1 ? ev.deltaY * 33 : ev.deltaMode === 2 ? ev.deltaY * 400 : ev.deltaY;
+    zoomAt(s * Math.exp(-d * 0.0018), ev.clientX, ev.clientY, false);
+  }, { passive: false });
+  frame.addEventListener("dblclick", (ev) => zoomAt(s > 1 ? 1 : 2.5, ev.clientX, ev.clientY, true));
+  let drag = null;
+  frame.addEventListener("pointerdown", (ev) => {
+    if (s === 1 || ev.button !== 0) return;
+    drag = { x: ev.clientX - tx, y: ev.clientY - ty };
+    frame.setPointerCapture(ev.pointerId);
+    frame.classList.add("dragging");
+  });
+  frame.addEventListener("pointermove", (ev) => {
+    if (!drag) return;
+    tx = ev.clientX - drag.x; ty = ev.clientY - drag.y;
+    apply(false);
+  });
+  const end = () => { drag = null; frame.classList.remove("dragging"); };
+  frame.addEventListener("pointerup", end);
+  frame.addEventListener("pointercancel", end);
 }
 
 // ---------- generate ----------

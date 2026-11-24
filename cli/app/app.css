@@ -150,7 +150,12 @@ table.list img { width: 40px; height: 40px; object-fit: cover; border-radius: 6p
 
 .detail { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(240px, 1fr); gap: 20px; }
 .detail .big { display: flex; flex-direction: column; gap: 10px; align-items: center; }
-.detail .big img { max-width: 100%; max-height: 62vh; border-radius: 12px; }
+.detail .big .zoom { position: relative; overflow: hidden; border-radius: 12px; line-height: 0; max-width: 100%; cursor: zoom-in; touch-action: none; user-select: none; }
+.detail .big .zoom.zoomed { cursor: grab; }
+.detail .big .zoom.dragging { cursor: grabbing; }
+.detail .big .zoom img { display: block; max-width: 100%; max-height: 62vh; transform-origin: 0 0; will-change: transform; }
+.zoom-pct { position: absolute; right: 8px; bottom: 8px; padding: 3px 8px; border-radius: 7px; background: rgba(0,0,0,.6); color: #fff; font-size: 12px; line-height: 1.4; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.zoom-pct.show { opacity: 1; }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px; }
 .kv dt { color: var(--muted); } .kv dd { margin: 0; word-break: break-word; }
 .prompt-box { background: var(--card2); border-radius: 10px; padding: 10px 12px; white-space: pre-wrap; }
