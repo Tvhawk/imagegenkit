@@ -1,5 +1,5 @@
 # ImageGenKit installer for Windows: the `imagegenkit` command, the ImageGenKit app and the agent skill.
-#   irm https://raw.githubusercontent.com/Tvhawk/imagegenkit/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/davidkrammer/imagegenkit/main/install.ps1 | iex
 # or, from a checkout:  powershell -ExecutionPolicy Bypass -File install.ps1
 #
 # Installs to %USERPROFILE%\.local\share\imagegenkit, puts `imagegenkit` in %USERPROFILE%\.local\bin (added to your
@@ -10,7 +10,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-$Repo  = if ($env:IMAGEGENKIT_REPO) { $env:IMAGEGENKIT_REPO } else { 'Tvhawk/imagegenkit' }
+$Repo  = if ($env:IMAGEGENKIT_REPO) { $env:IMAGEGENKIT_REPO } else { 'davidkrammer/imagegenkit' }
 $Raw   = if ($env:IMAGEGENKIT_RAW) { $env:IMAGEGENKIT_RAW } else { "https://raw.githubusercontent.com/$Repo/main" }
 $Share = Join-Path $env:USERPROFILE '.local\share\imagegenkit'
 $Bin   = Join-Path $env:USERPROFILE '.local\bin'

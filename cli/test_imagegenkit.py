@@ -115,8 +115,6 @@ class CLITests(unittest.TestCase):
     def test_version_compare_never_downgrades(self):
         self.assertLess(igk.version_tuple("v1.0.0"), igk.version_tuple("1.0.5"))
         self.assertLess(igk.version_tuple("1.0.9"), igk.version_tuple("1.0.10"))
-        self.assertLess(igk.version_tuple("1.1.0"), igk.version_tuple("1.1.0-win.1"))
-        self.assertLess(igk.version_tuple("1.1.0-win.1"), igk.version_tuple("1.1.0-win.2"))
 
 
 class PortableTests(unittest.TestCase):

@@ -18,9 +18,8 @@
 
 ![ImageGenKit overview](docs/screenshots/overview.jpg)
 
-> **This fork adds Windows.** The `imagegenkit` command, the agent skill and local models run natively on Windows 10/11,
-> and a new ImageGenKit app for Windows (gallery, generate, usage, settings, local models) opens from the Start menu.
-> See [Windows](#windows). The Mac app is unchanged.
+> **Also on Windows:** the `imagegenkit` command, the agent skill and local models run natively on Windows 10/11, and an
+> ImageGenKit app for Windows opens from the Start menu. See [Windows](#windows).
 
 ## What it does
 
@@ -59,7 +58,7 @@
 In PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/Tvhawk/imagegenkit/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/davidkrammer/imagegenkit/main/install.ps1 | iex
 ```
 
 It needs Python 3.9+ (`winget install Python.Python.3.13` if you don't have it) and nothing else. The installer puts

@@ -13,7 +13,7 @@ Use these steps instead of the macOS ones below. Run them in PowerShell.
 2. Install the command, the app and the skills:
 
    ```powershell
-   irm https://raw.githubusercontent.com/Tvhawk/imagegenkit/main/install.ps1 | iex
+   irm https://raw.githubusercontent.com/davidkrammer/imagegenkit/main/install.ps1 | iex
    ```
 
    It adds `%USERPROFILE%\.localin` to the user's PATH; new terminals pick it up.
