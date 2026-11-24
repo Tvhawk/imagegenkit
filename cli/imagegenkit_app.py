@@ -696,6 +696,105 @@ def window_open():
     return os.path.islink(APP_PROFILE / "SingletonLock")
 
 
+APP_ID = "ImageGenKit.App"
+
+
+def relaunch_command():
+    exe = Path(sys.executable)
+    if exe.name.lower() == "python.exe" and (exe.parent / "pythonw.exe").exists():
+        exe = exe.parent / "pythonw.exe"
+    return f'"{exe}" "{CLI}" app'
+
+
+def tag_windows(stop):
+    """Give the app window its own taskbar identity. Edge app windows otherwise identify as Edge (and by a URL whose
+    port and token change every launch), so pinning one pins plain Edge. With an AppUserModelID and a relaunch
+    command, the pin starts ImageGenKit and groups with its windows."""
+    import ctypes
+    from ctypes import wintypes as wt
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("a", ctypes.c_uint32), ("b", ctypes.c_uint16), ("c", ctypes.c_uint16), ("d", ctypes.c_ubyte * 8)]
+
+    class PKEY(ctypes.Structure):
+        _fields_ = [("fmtid", GUID), ("pid", wt.DWORD)]
+
+    class PROPVARIANT(ctypes.Structure):
+        _fields_ = [("vt", ctypes.c_ushort), ("r1", ctypes.c_ushort), ("r2", ctypes.c_ushort), ("r3", ctypes.c_ushort),
+                    ("p", ctypes.c_void_p), ("p2", ctypes.c_void_p)]
+
+    def pkey(pid):  # System.AppUserModel.* = {9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}, pid
+        return PKEY(GUID(0x9F4C2855, 0x9F79, 0x4B39, (ctypes.c_ubyte * 8)(0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3)), pid)
+
+    iid_store = GUID(0x886D8EEB, 0x8CF2, 0x4446, (ctypes.c_ubyte * 8)(0x8D, 0x02, 0xCD, 0xBA, 0x1D, 0xBD, 0xCF, 0x99))
+    u32, shell32, ole32, k32 = (ctypes.WinDLL(n) for n in ("user32", "shell32", "ole32", "kernel32"))
+    ole32.CoInitializeEx(None, 2)  # COINIT_APARTMENTTHREADED
+    shell32.SHGetPropertyStoreForWindow.argtypes = [wt.HWND, ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)]
+    k32.OpenProcess.restype = wt.HANDLE
+    HRES = ctypes.HRESULT
+    GetValue = ctypes.WINFUNCTYPE(HRES, ctypes.c_void_p, ctypes.POINTER(PKEY), ctypes.POINTER(PROPVARIANT))
+    SetValue = ctypes.WINFUNCTYPE(HRES, ctypes.c_void_p, ctypes.POINTER(PKEY), ctypes.POINTER(PROPVARIANT))
+    Commit = ctypes.WINFUNCTYPE(HRES, ctypes.c_void_p)
+    Release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)
+    props = [(2, relaunch_command()), (3, str(STATIC / "icon.ico") + ",0"), (4, "ImageGenKit"), (5, APP_ID)]
+
+    def proc_name(hwnd):
+        pid = wt.DWORD()
+        u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        h = k32.OpenProcess(0x1000, False, pid.value)
+        if not h:
+            return ""
+        try:
+            buf, n = ctypes.create_unicode_buffer(520), wt.DWORD(520)
+            return Path(buf.value).name.lower() if k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)) else ""
+        finally:
+            k32.CloseHandle(h)
+
+    def tag(hwnd):
+        store = ctypes.c_void_p()
+        if shell32.SHGetPropertyStoreForWindow(hwnd, ctypes.byref(iid_store), ctypes.byref(store)) != 0:
+            return
+        vt = ctypes.cast(store, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)))[0]
+        try:
+            cur = PROPVARIANT()
+            GetValue(vt[5])(store, ctypes.byref(pkey(5)), ctypes.byref(cur))
+            same = cur.vt == 31 and ctypes.wstring_at(cur.p) == APP_ID
+            ole32.PropVariantClear(ctypes.byref(cur))
+            if same:
+                return
+            for pid, value in props:  # relaunch properties first, the ID last
+                buf = ctypes.create_unicode_buffer(value)
+                pv = PROPVARIANT(vt=31, p=ctypes.cast(buf, ctypes.c_void_p))  # VT_LPWSTR
+                SetValue(vt[6])(store, ctypes.byref(pkey(pid)), ctypes.byref(pv))
+            Commit(vt[7])(store)
+        finally:
+            Release(vt[2])(store)
+
+    found = []
+    EnumProc = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+    def each(hwnd, _):
+        if u32.IsWindowVisible(hwnd):
+            cls, title = ctypes.create_unicode_buffer(64), ctypes.create_unicode_buffer(64)
+            u32.GetClassNameW(hwnd, cls, 64)
+            u32.GetWindowTextW(hwnd, title, 64)
+            if cls.value == "Chrome_WidgetWin_1" and title.value == "ImageGenKit":
+                found.append(hwnd)
+        return True
+    cb = EnumProc(each)
+
+    while not stop.is_set():
+        found.clear()
+        u32.EnumWindows(cb, 0)
+        for hwnd in found:
+            if proc_name(hwnd) in ("msedge.exe", "chrome.exe"):
+                try:
+                    tag(hwnd)
+                except OSError:
+                    pass
+        stop.wait(2)
+
+
 def pid_alive(pid):
     if sys.platform == "win32":
         import ctypes
@@ -787,11 +886,15 @@ def main(port=0, open_window=True, cli_path=None, stay=False):
             WATCHED.add(pid)
     if not stay:
         threading.Thread(target=watchdog, args=(server,), daemon=True).start()
+    stop_tagging = threading.Event()
+    if sys.platform == "win32" and open_window:
+        threading.Thread(target=tag_windows, args=(stop_tagging,), daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        stop_tagging.set()
         server.server_close()
         try:
             if json.loads(INSTANCE.read_text(encoding="utf-8")).get("pid") == os.getpid():
