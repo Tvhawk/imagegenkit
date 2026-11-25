@@ -680,7 +680,7 @@ async function settingsLocal(body) {
   const running = jobs.filter((j) => j.kind === "download");
   body.innerHTML = `<div class="grid">
     <div class="card"><h2>Free models that run on ${esc(st.device)}</h2>
-      <p class="muted" style="margin-top:-4px">Open image models run on your graphics card with stable-diffusion.cpp. No account and no cost per image, nothing leaves ${esc(st.device)}, and they work offline. Images made here are marked as AI-made (metadata and an invisible watermark).</p>
+      <p class="muted" style="margin-top:-4px">Open image models run on your graphics card with stable-diffusion.cpp. No account and no cost per image, nothing leaves ${esc(st.device)}, and they work offline.</p>
       ${L.supported ? "" : '<p class="chip bad">This PC can\'t run local models (needs 64-bit Windows on x64).</p>'}
       <div class="form-grid"><label>Engine</label><div class="row"><select id="backend"><option value="vulkan">Vulkan: any recent NVIDIA, AMD or Intel GPU</option><option value="cpu">CPU only (slow, no GPU needed)</option></select>
         <span class="small muted">${L.engine.installed ? `Installed: ${esc(L.engine.version)} (${esc(L.engine.backend || "")})` : "Downloads with the first model"}</span></div>

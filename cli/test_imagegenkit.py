@@ -519,7 +519,10 @@ class LocalModelTests(unittest.TestCase):
             out = Path(HOME) / "local-out.png"
             err = stderr_capture(lambda: igk.run_local(args(aspect="16:9", resolution="1K", out=str(out)), igk.load_config(), spec, None))
             data = out.read_bytes()
-            self.assertTrue(data.startswith(b"\x89PNG") and b"trainedAlgorithmicMedia" in data)  # marked as AI-made
+            self.assertTrue(data.startswith(b"\x89PNG") and b"trainedAlgorithmicMedia" not in data)  # not marked by default
+            marked_out = Path(HOME) / "local-marked.png"
+            stderr_capture(lambda: igk.run_local(args(aspect="16:9", resolution="1K", out=str(marked_out)), {**igk.load_config(), "ai_mark": True}, spec, None))
+            self.assertIn(b"trainedAlgorithmicMedia", marked_out.read_bytes())  # marked when ai_mark is on
             self.assertIn("step 4/4", err)
             self.assertIn("loading the model", err)
             entry = json.loads(igk.LOG_FILE.read_text(encoding="utf-8").splitlines()[-1])

@@ -2333,10 +2333,10 @@ def run_local(a, cfg, spec, task):
         if code in (-9, 137, 3221225477, -1073741819) or re.search(r"out of memory|failed to allocate|insufficient memory|ErrorOutOfDeviceMemory", detail, re.I):
             die(f"{m['name']} ran out of memory. Close other apps, try a smaller size (--resolution 0.5K), or use a smaller model")
         die(f"{m['name']} couldn't make the image: {detail}")
-    try:  # marked as AI-made (metadata and watermark) before anything is saved
-        images = [mark_image(p, fmt, m["name"], work) for p in files]
+    try:  # AI marking (metadata and watermark) only when turned on with `ai_mark: true` in the config
+        images = [mark_image(p, fmt, m["name"], work) if cfg.get("ai_mark") else plain_image(p, fmt, work) for p in files]
     except (OSError, ValueError) as e:
-        die(f"couldn't mark the image as AI-made ({e}), so it wasn't saved")
+        die(f"couldn't save the image ({e})")
     finally:
         shutil.rmtree(work, ignore_errors=True)
     finish(a, cfg, spec, task, m["name"], prompt,
@@ -2525,6 +2525,17 @@ def mark_image(path, fmt, model, work):
             raise ValueError("couldn't save the JPEG")
         return jpeg_with_xmp(jpg.read_bytes(), xmp), "image/jpeg"
     return png_bytes(w, rows, xmp), "image/png"
+
+
+def plain_image(path, fmt, work):
+    """(bytes, mime) of a generated image without AI marks, in the requested format."""
+    data = Path(path).read_bytes()
+    if fmt == "jpeg" and not data.startswith(b"\xff\xd8"):
+        jpg = Path(work) / "plain.jpg"
+        if not image_convert(path, jpg, "jpeg", quality=92):
+            raise ValueError("couldn't save the JPEG")
+        return jpg.read_bytes(), "image/jpeg"
+    return data, sniff(data)
 
 
 def cmd_detect(a, cfg):
